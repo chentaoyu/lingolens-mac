@@ -46,12 +46,15 @@ public struct TranscriptEntry: Codable, Sendable, Equatable, Identifiable {
 public struct MeetingSummary: Sendable, Equatable, Identifiable {
     public var meta: MeetingMeta
     public var hasMinutes: Bool
+    /// 转写第一条的摘要，用于会议列表里的一行预览。
+    public var preview: String?
 
     public var id: String { meta.id }
 
-    public init(meta: MeetingMeta, hasMinutes: Bool) {
+    public init(meta: MeetingMeta, hasMinutes: Bool, preview: String? = nil) {
         self.meta = meta
         self.hasMinutes = hasMinutes
+        self.preview = preview
     }
 }
 

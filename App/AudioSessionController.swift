@@ -21,6 +21,8 @@ final class AudioSessionController: ObservableObject {
     @Published private(set) var isRecordingMeeting = false
     @Published private(set) var activeLanguages: [AudioChannel: String] = [:]
     @Published private(set) var startedAt: Date?
+    /// 两路音频的当前电平（0…1），菜单栏用来显示「有没有采到声音」。
+    @Published private(set) var levels: [AudioChannel: Float] = [:]
 
     /// 会话结束后通知界面刷新会议列表。
     var onSessionFinished: (() -> Void)?
@@ -35,6 +37,10 @@ final class AudioSessionController: ObservableObject {
     private var captureTask: Task<Void, Never>?
     private var eventTasks: [AudioChannel: Task<Void, Never>] = [:]
     private var currentMeeting: MeetingMeta?
+
+    /// 缓冲区间累积的峰值，由电平循环按固定帧率取走并平滑衰减。
+    private var levelPeak: [AudioChannel: Float] = [:]
+    private var levelTask: Task<Void, Never>?
 
     init(
         settingsStore: SettingsStore,
@@ -113,12 +119,15 @@ final class AudioSessionController: ObservableObject {
             captureTask = Task { @MainActor [weak self] in
                 for await tagged in stream {
                     guard let self, let session = self.sessions[tagged.channel] else { continue }
+                    let level = AudioBufferTools.level(of: tagged.buffer)
+                    self.levelPeak[tagged.channel] = max(self.levelPeak[tagged.channel] ?? 0, level)
                     await session.append(tagged.buffer)
                 }
             }
 
             state = .running
             startedAt = Date()
+            startLevelLoop()
             if capture.warnings.isEmpty {
                 statusText = "字幕运行中"
             } else {
@@ -131,10 +140,13 @@ final class AudioSessionController: ObservableObject {
         }
     }
 
-    func stop() async {
+    /// 结束时返回刚才落盘的会议（没有记录会议时为 nil），供界面给出「会议已保存」回执。
+    @discardableResult
+    func stop() async -> MeetingMeta? {
         captureTask?.cancel()
         captureTask = nil
         capture.stop()
+        stopLevelLoop()
 
         // 先让每路会话收尾，事件消费者仍在运行，避免丢掉最后的 final 结果。
         for session in sessions.values {
@@ -147,6 +159,7 @@ final class AudioSessionController: ObservableObject {
         }
         eventTasks.removeAll()
 
+        let finishedMeeting = currentMeeting
         if let meeting = currentMeeting {
             try? await meetingStore.finish(id: meeting.id)
         }
@@ -157,6 +170,39 @@ final class AudioSessionController: ObservableObject {
         state = .idle
         statusText = "已停止"
         onSessionFinished?()
+        return finishedMeeting
+    }
+
+    // MARK: - 电平
+
+    /// 以约 15 Hz 更新电平：上升立刻跟随，回落按系数衰减，避免条状指示抖动。
+    private func startLevelLoop() {
+        levelTask?.cancel()
+        levelTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(66))
+                guard let self else { return }
+                var next = self.levels
+                for channel in AudioChannel.allCases {
+                    let peak = self.levelPeak[channel] ?? 0
+                    let previous = self.levels[channel] ?? 0
+                    next[channel] = peak > previous ? peak : max(0, previous * 0.88)
+                }
+                self.levelPeak = [:]
+                if next != self.levels {
+                    self.levels = next
+                }
+            }
+        }
+    }
+
+    private func stopLevelLoop() {
+        levelTask?.cancel()
+        levelTask = nil
+        levelPeak = [:]
+        if !levels.isEmpty {
+            levels = [:]
+        }
     }
 
     private func handle(_ event: TranscriptionEvent) {

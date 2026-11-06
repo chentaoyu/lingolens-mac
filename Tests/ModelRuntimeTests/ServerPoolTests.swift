@@ -425,4 +425,48 @@ struct ServerPoolTests {
         #expect(snapshot.allSatisfy { $0.state == .stopped })
         #expect(launcher.launchedProcesses.allSatisfy { $0.terminateCount == 1 })
     }
+
+    @Test("关机后拒绝启动新进程")
+    func rejectsEnsureAfterShutdown() async throws {
+        let paths = makePaths()
+        defer { try? FileManager.default.removeItem(at: paths.appSupportDirectory.deletingLastPathComponent()) }
+        let launcher = MockLauncher()
+        let pool = makePool(paths: paths, launcher: launcher, health: MockHealth())
+
+        await pool.shutdown()
+        await #expect(throws: CancellationError.self) {
+            _ = try await pool.ensure(model: makeModel(), config: ServerLaunchConfig())
+        }
+        #expect(launcher.launchedProcesses.isEmpty)
+    }
+
+    @Test("启动过程中关机：已拉起的进程会被终止")
+    func shutdownDuringStartup() async throws {
+        let paths = makePaths()
+        defer { try? FileManager.default.removeItem(at: paths.appSupportDirectory.deletingLastPathComponent()) }
+        let launcher = MockLauncher()
+        let pool = ServerPool(
+            paths: paths,
+            python: makePython(paths),
+            launcher: launcher,
+            health: MockHealth(readyAfterCalls: .max),
+            memory: MockMemory(available: UInt64.max / 2),
+            portAllocator: { 43212 },
+            readinessTimeout: 5,
+            readinessPollInterval: 0.01,
+            shutdownGracePeriod: 0.1,
+            memoryCheckEnabled: false,
+            cleanupStaleProcesses: false
+        )
+        let model = makeModel()
+        let task = Task { try await pool.ensure(model: model, config: ServerLaunchConfig()) }
+        _ = await waitUntil { launcher.launchedProcesses.count == 1 }
+
+        await pool.shutdown()
+        _ = try? await task.value
+
+        #expect(launcher.launchedProcesses.allSatisfy { !$0.isRunning })
+        let state = await pool.state(for: model.id)
+        #expect(state == .stopped)
+    }
 }

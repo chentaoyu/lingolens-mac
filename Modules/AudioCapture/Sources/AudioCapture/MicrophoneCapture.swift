@@ -18,7 +18,14 @@ public enum MicrophoneCaptureError: Error, LocalizedError {
     }
 }
 
-/// 麦克风采集，开启 voice processing 以便外放时抑制回声。
+/// 麦克风采集。
+///
+/// 这里**故意不开启 voice processing**，因为 AUVoiceIO 会让两个功能不可用：
+/// 1. 系统会把「其它音频」（Teams 里对方的声音）自动 duck 掉约 30 dB，用户听得的小时也调不回来；
+/// 2. 同一进程里一旦有 voice processing，Core Audio 的进程 Tap 就收不到系统音频——
+///    先建 Tap 再开 VP 时，Tap 会在约 0.4 秒后停止出数据，对方的字幕整段丢失。
+/// 实测普通 AVAudioEngine 输入 + 进程 Tap 可以稳定共存，所以让回声消除让位给系统音频采集。
+/// 代价是外放时对方的声音会从麦克风串进来，建议开会时戴耳机。
 public final class MicrophoneCapture: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private let onBuffer: @Sendable (AVAudioPCMBuffer) -> Void
@@ -43,10 +50,6 @@ public final class MicrophoneCapture: @unchecked Sendable {
         }
 
         let input = engine.inputNode
-        if !input.isVoiceProcessingEnabled {
-            try input.setVoiceProcessingEnabled(true)
-        }
-
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
             throw MicrophoneCaptureError.invalidFormat

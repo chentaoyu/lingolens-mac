@@ -4,16 +4,29 @@ import ModelRuntime
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         MainActor.assumeIsolated {
-            NSApp.setActivationPolicy(.accessory)
+            // 是否显示 Dock 图标由设置决定，默认只在菜单栏常驻。
+            NSApp.setActivationPolicy(
+                UserDefaults.standard.bool(forKey: "showInDock") ? .regular : .accessory
+            )
             AppEnvironment.shared.start()
 
             // 菜单栏应用首次启动时给一个可见反馈；之后保持静默常驻。
-            let key = "LingoLens.didOpenMainWindow"
-            if !UserDefaults.standard.bool(forKey: key) {
-                UserDefaults.standard.set(true, forKey: key)
+            let didOpenMainWindow = UserDefaults.standard.bool(forKey: "LingoLens.didOpenMainWindow")
+            let didFinishOnboarding = UserDefaults.standard.bool(
+                forKey: AppEnvironment.didFinishOnboardingKey
+            )
+            if !didOpenMainWindow {
+                UserDefaults.standard.set(true, forKey: "LingoLens.didOpenMainWindow")
+            }
+
+            if !didOpenMainWindow || !didFinishOnboarding {
                 Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(400))
                     MainWindowController.shared.show()
+                    guard !didFinishOnboarding else { return }
+                    // 等窗口完成首帧再挂 sheet，否则会贴在空白窗口上。
+                    try? await Task.sleep(for: .milliseconds(300))
+                    AppEnvironment.shared.isOnboardingPresented = true
                 }
             }
 

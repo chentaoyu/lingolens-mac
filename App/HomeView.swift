@@ -4,12 +4,14 @@ import ModelLibrary
 import ModelRuntime
 import SelectionTranslate
 import SwiftUI
+import Transcriber
 
 /// 首页：状态总览、待处理问题、快捷操作与最近会议。
 struct HomeView: View {
     @EnvironmentObject private var environment: AppEnvironment
     @State private var recentMeetings: [MeetingSummary] = []
     @State private var accessibilityTrusted = AccessibilityPermission.isTrusted
+    @State private var speechLocaleCount = 0
 
     var body: some View {
         ScrollView {
@@ -34,6 +36,9 @@ struct HomeView: View {
         .task(id: environment.meetingsRevision) {
             recentMeetings = Array(await environment.loadMeetings().prefix(3))
         }
+        .task {
+            speechLocaleCount = await SpeechAssetManager.supportedLocaleIdentifiers().count
+        }
     }
 
     // MARK: - 头部
@@ -41,7 +46,7 @@ struct HomeView: View {
     private var header: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("LingoLens")
+                Text(greeting)
                     .font(.system(size: 24, weight: .semibold))
                 Text("翻译、实时字幕与会议纪要，全部在这台 Mac 上完成。")
                     .foregroundStyle(.secondary)
@@ -49,6 +54,16 @@ struct HomeView: View {
             Spacer()
             SessionButton()
                 .controlSize(.large)
+        }
+    }
+
+    private var greeting: String {
+        switch Calendar.current.component(.hour, from: Date()) {
+        case 5..<9: return "早上好"
+        case 9..<12: return "上午好"
+        case 12..<14: return "中午好"
+        case 14..<18: return "下午好"
+        default: return "晚上好"
         }
     }
 
@@ -60,7 +75,7 @@ struct HomeView: View {
             IssueBanner(
                 title: "运行时安装失败",
                 message: environment.runtimeProgress.message,
-                tint: .red
+                tint: Color.danger
             ) {
                 Button("查看日志") { environment.openLogsFolder() }
                 Button("重试") { Task { await environment.installRuntime(force: true) } }
@@ -68,7 +83,7 @@ struct HomeView: View {
             }
         }
         if let resident = environment.residentModel, case let .failed(message) = environment.state(for: resident) {
-            IssueBanner(title: "常驻模型启动失败", message: message, tint: .red) {
+            IssueBanner(title: "常驻模型启动失败", message: message, tint: Color.danger) {
                 Button("查看日志") { environment.openLog(for: resident) }
                 Button("重试") { Task { await environment.startServer(for: resident) } }
                     .buttonStyle(.borderedProminent)
@@ -78,7 +93,7 @@ struct HomeView: View {
             IssueBanner(
                 title: environment.models.isEmpty ? "还没有模型" : "尚未设置常驻模型",
                 message: "划词翻译、字幕翻译和会议纪要都需要一个本地模型。",
-                tint: .orange
+                tint: Color.warning
             ) {
                 Button("去模型页") { environment.mainTab = .models }
                     .buttonStyle(.borderedProminent)
@@ -88,7 +103,7 @@ struct HomeView: View {
             IssueBanner(
                 title: "未授予辅助功能权限",
                 message: "划词翻译会退化为模拟 ⌘C 读取选中文字，部分应用可能取不到。",
-                tint: .orange
+                tint: Color.warning
             ) {
                 Button("去授权") { AccessibilityPermission.openSystemSettings() }
             }
@@ -97,7 +112,7 @@ struct HomeView: View {
             IssueBanner(
                 title: "快捷键 \(environment.hotkeyDisplay) 注册失败",
                 message: "可能被其他应用占用，请在设置中换一个组合键。",
-                tint: .orange
+                tint: Color.warning
             ) {
                 Button("去设置") { environment.mainTab = .settings }
             }
@@ -140,7 +155,7 @@ struct HomeView: View {
                 Spacer()
                 Text(environment.runtimeInstalled ? "已就绪" : environment.runtimeProgress.phase == .failed ? "失败" : "准备中")
                     .font(.caption)
-                    .foregroundStyle(environment.runtimeInstalled ? .green : .orange)
+                    .foregroundStyle(environment.runtimeInstalled ? Color.success : Color.warning)
             }
             Text(environment.runtimeProgress.message)
                 .font(.caption)
@@ -153,6 +168,21 @@ struct HomeView: View {
                     ProgressView().progressViewStyle(.linear)
                 }
             }
+            Divider()
+                .padding(.vertical, 2)
+
+            HStack(spacing: 6) {
+                Image(systemName: "waveform")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("系统语音识别")
+                    .font(.system(size: 12, weight: .medium))
+                Spacer()
+                Text(speechLocaleCount > 0 ? "支持 \(speechLocaleCount) 种语言" : "随系统提供")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Text("运行中的模型服务：\(environment.servers.filter { $0.state.isRunning }.count) 个")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -256,7 +286,7 @@ struct SessionButton: View {
             }
         }
         .buttonStyle(.borderedProminent)
-        .tint(session.state == .running ? .red : .accentColor)
+        .tint(session.state == .running ? Color.danger : .accentColor)
         .accessibilityLabel(session.state == .running || session.state == .starting ? "停止音频会话" : "开始音频会话")
     }
 }
@@ -366,8 +396,8 @@ enum MemoryFit {
     var tint: Color {
         switch self {
         case .comfortable: return .accentColor
-        case .tight: return .orange
-        case .insufficient: return .red
+        case .tight: return Color.warning
+        case .insufficient: return Color.danger
         }
     }
 }
@@ -408,6 +438,17 @@ private struct RecentMeetingRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 12) {
+                VStack(spacing: 1) {
+                    Text(dayText)
+                        .font(.system(size: 13, weight: .semibold))
+                        .monospacedDigit()
+                    Text(monthText)
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(width: 30, height: 34)
+                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+
                 VStack(alignment: .leading, spacing: 2) {
                     Text(meeting.meta.title).font(.system(size: 13, weight: .medium))
                     Text(subtitle)
@@ -417,7 +458,7 @@ private struct RecentMeetingRow: View {
                 Spacer()
                 Text(meeting.hasMinutes ? "已有纪要" : "仅转写")
                     .font(.caption)
-                    .foregroundStyle(meeting.hasMinutes ? .green : .secondary)
+                    .foregroundStyle(meeting.hasMinutes ? Color.success : .secondary)
                 Image(systemName: "chevron.right")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -428,6 +469,19 @@ private struct RecentMeetingRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(meeting.meta.title)，\(subtitle)，\(meeting.hasMinutes ? "已有纪要" : "仅转写")")
+    }
+
+    private var dayText: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "d"
+        return formatter.string(from: meeting.meta.startedAt)
+    }
+
+    private var monthText: String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "M月"
+        return formatter.string(from: meeting.meta.startedAt)
     }
 
     private var subtitle: String {

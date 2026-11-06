@@ -1,6 +1,7 @@
 import AppKit
 import LiveSubtitle
 import LLMClient
+import Meetings
 import ModelLibrary
 import SelectionTranslate
 import Settings
@@ -10,11 +11,15 @@ struct AppSettingsView: View {
     @EnvironmentObject private var environment: AppEnvironment
     @State private var section: SettingsSection = .general
     @State private var showReinstallConfirm = false
+    @State private var templates: [MinutesTemplate] = []
+    @State private var showTemplateSheet = false
+    @AppStorage("showInDock") private var showInDock = false
 
     enum SettingsSection: String, CaseIterable, Identifiable {
         case general = "通用"
         case audio = "音频与字幕"
         case scenes = "场景"
+        case templates = "纪要模板"
         case models = "模型服务"
         case system = "权限与运行时"
 
@@ -22,14 +27,16 @@ struct AppSettingsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("", selection: $section) {
-                ForEach(SettingsSection.allCases) { Text($0.rawValue).tag($0) }
+        // 与原型一致：设置内部再分一列导航，避免顶部 6 段 segmented 在窄窗口里挤成一团。
+        HStack(spacing: 0) {
+            List(selection: sectionBinding) {
+                ForEach(SettingsSection.allCases) { item in
+                    Text(item.rawValue)
+                        .tag(item)
+                }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-            .padding(.vertical, 12)
+            .listStyle(.sidebar)
+            .frame(width: 150)
 
             Divider()
 
@@ -38,11 +45,22 @@ struct AppSettingsView: View {
                 case .general: generalForm
                 case .audio: audioForm
                 case .scenes: scenesPage
+                case .templates: templatesPage
                 case .models: modelsForm
                 case .system: systemForm
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .task { templates = await environment.templates() }
+        .onChange(of: showTemplateSheet) { _, showing in
+            if !showing {
+                Task { templates = await environment.templates() }
+            }
+        }
+        .sheet(isPresented: $showTemplateSheet) {
+            MinutesTemplateSheet()
+                .environmentObject(environment)
         }
         .confirmationDialog(
             "重新安装 Python 运行时？",
@@ -71,7 +89,7 @@ struct AppSettingsView: View {
                         if !environment.coordinator.isHotkeyRegistered {
                             Label("注册失败，可能被占用", systemImage: "exclamationmark.triangle.fill")
                                 .font(.caption)
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(Color.warning)
                         }
                         HotkeyRecorder(spec: generalBinding(\.hotkey))
                     }
@@ -85,6 +103,12 @@ struct AppSettingsView: View {
                     get: { environment.settings.general.launchAtLogin },
                     set: { toggleLaunchAtLogin($0) }
                 ))
+                Toggle("在 Dock 中显示", isOn: dockBinding)
+            }
+            Section("帮助") {
+                LabeledContent("首次使用引导") {
+                    Button("重新查看") { environment.presentOnboarding() }
+                }
             }
         }
         .formStyle(.grouped)
@@ -155,6 +179,49 @@ struct AppSettingsView: View {
                 }
             }
             .padding(20)
+        }
+    }
+
+    // MARK: - 纪要模板
+
+    private var templatesPage: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("生成纪要时使用的提示词模板，会议页可以随时切换。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                ForEach(templates) { template in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            Text(template.name)
+                                .font(.system(size: 12, weight: .semibold))
+                            if template.id == MinutesTemplate.standardID {
+                                TagBadge(text: "内置", color: .secondary)
+                            }
+                            Spacer()
+                        }
+                        Text(template.prompt)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+                }
+
+                Button {
+                    showTemplateSheet = true
+                } label: {
+                    Label("管理模板…", systemImage: "square.and.pencil")
+                }
+                .padding(.top, 4)
+            }
+            .padding(20)
+            .frame(maxWidth: 680, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -229,7 +296,7 @@ struct AppSettingsView: View {
                         environment.runtimeInstalled ? "Python 环境已安装" : "Python 环境未就绪",
                         systemImage: environment.runtimeInstalled ? "checkmark.seal.fill" : "shippingbox"
                     )
-                    .foregroundStyle(environment.runtimeInstalled ? Color.green : Color.orange)
+                    .foregroundStyle(environment.runtimeInstalled ? Color.success : Color.warning)
                 }
                 HStack {
                     Button("重新安装…") { showReinstallConfirm = true }
@@ -247,6 +314,24 @@ struct AppSettingsView: View {
         ForEach(TranslationPrompt.supportedTargetLanguages, id: \.id) { language in
             Text(language.name).tag(language.id)
         }
+    }
+
+    private var sectionBinding: Binding<SettingsSection?> {
+        Binding(
+            get: { section },
+            set: { if let value = $0 { section = value } }
+        )
+    }
+
+    /// Dock 显隐是进程级状态，不进设置文件，切换后立即生效。
+    private var dockBinding: Binding<Bool> {
+        Binding(
+            get: { showInDock },
+            set: { value in
+                showInDock = value
+                NSApp.setActivationPolicy(value ? .regular : .accessory)
+            }
+        )
     }
 
     private func generalBinding<Value>(_ keyPath: WritableKeyPath<GeneralSettings, Value>) -> Binding<Value> {
@@ -294,7 +379,11 @@ struct AppSettingsView: View {
             try LaunchAtLogin.set(enabled)
             environment.updateGeneral { $0.launchAtLogin = enabled }
         } catch {
-            environment.lastError = "设置开机启动失败：\(error.localizedDescription)"
+            environment.reportMessage(
+                "设置开机启动失败：\(error.localizedDescription)",
+                title: "无法修改开机启动",
+                code: "LAUNCH_AT_LOGIN"
+            )
         }
     }
 }

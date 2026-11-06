@@ -29,12 +29,25 @@ enum MainTab: String, Hashable, CaseIterable, Identifiable {
 
 struct MainWindowView: View {
     @EnvironmentObject private var environment: AppEnvironment
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         NavigationSplitView {
-            List(MainTab.allCases, selection: tabBinding) { tab in
-                Label(tab.title, systemImage: tab.systemImage)
+            VStack(spacing: 0) {
+                sidebarBrand
+                List(MainTab.allCases, selection: tabBinding) { tab in
+                    HStack(spacing: 6) {
+                        Label(tab.title, systemImage: tab.systemImage)
+                        if tab == .meetings, environment.hasUnseenMeetings {
+                            Circle()
+                                .fill(Color.accentColor)
+                                .frame(width: 5, height: 5)
+                                .accessibilityLabel("有新的会议记录")
+                        }
+                        Spacer(minLength: 0)
+                    }
                     .tag(tab)
+                }
             }
             .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 240)
             .safeAreaInset(edge: .bottom) {
@@ -45,18 +58,38 @@ struct MainWindowView: View {
                 .navigationTitle(environment.mainTab.title)
         }
         .frame(minWidth: 940, minHeight: 600)
-        .alert(
-            "出错了",
-            isPresented: Binding(
-                get: { environment.lastError != nil },
-                set: { if !$0 { environment.clearError() } }
-            ),
-            presenting: environment.lastError
-        ) { _ in
-            Button("好") { environment.clearError() }
-        } message: { message in
-            Text(message)
+        .onChange(of: environment.mainTab) { _, tab in
+            if tab == .meetings {
+                environment.markMeetingsSeen()
+            }
         }
+        .overlay(alignment: .top) {
+            if let error = environment.lastError {
+                ProblemBanner(error: error, onDismiss: environment.clearError)
+                    .padding(.top, 12)
+                    .padding(.horizontal, 20)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: environment.lastError)
+        .sheet(isPresented: $environment.isOnboardingPresented) {
+            OnboardingView()
+                .environmentObject(environment)
+        }
+        .overlay(alignment: .bottom) {
+            if let toast = environment.toast {
+                ToastBanner(
+                    toast: toast,
+                    onAction: environment.performToastAction,
+                    onDismiss: environment.dismissToast
+                )
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.bottom, 20)
+                .padding(.horizontal, 20)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: environment.toast)
     }
 
     @ViewBuilder
@@ -67,6 +100,23 @@ struct MainWindowView: View {
         case .models: ModelsView()
         case .settings: AppSettingsView()
         }
+    }
+
+    private var sidebarBrand: some View {
+        HStack(spacing: 8) {
+            Image("BrandIcon")
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 20, height: 20)
+                .accessibilityHidden(true)
+            Text("LingoLens")
+                .font(.system(size: 13, weight: .semibold))
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+        .accessibilityElement(children: .combine)
     }
 
     private var tabBinding: Binding<MainTab?> {
@@ -85,7 +135,7 @@ private struct SidebarStatusFooter: View {
         VStack(alignment: .leading, spacing: 6) {
             if environment.audioSession.state == .running {
                 HStack(spacing: 6) {
-                    Circle().fill(.red).frame(width: 7, height: 7)
+                    Circle().fill(Color.danger).frame(width: 7, height: 7)
                     Text(environment.audioSession.isRecordingMeeting ? "正在记录会议" : "音频会话运行中")
                 }
             }
@@ -107,11 +157,11 @@ private struct SidebarStatusFooter: View {
 extension AppEnvironment {
     /// 常驻模型状态对应的指示色，侧边栏、首页、菜单栏共用。
     var residentStatusColor: Color {
-        guard runtimeInstalled, let resident = residentModel else { return .orange }
+        guard runtimeInstalled, let resident = residentModel else { return Color.warning }
         switch state(for: resident) {
-        case .ready: return .green
-        case .starting, .stopping: return .orange
-        case .failed: return .red
+        case .ready: return Color.success
+        case .starting, .stopping: return Color.warning
+        case .failed: return Color.danger
         case .stopped: return .secondary
         }
     }

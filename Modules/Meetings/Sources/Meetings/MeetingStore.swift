@@ -116,7 +116,9 @@ public actor MeetingStore {
                   let meta = try? decoder.decode(MeetingMeta.self, from: data)
             else { continue }
             let hasMinutes = FileManager.default.fileExists(atPath: url.appendingPathComponent("minutes.md").path)
-            summaries.append(MeetingSummary(meta: meta, hasMinutes: hasMinutes))
+            summaries.append(
+                MeetingSummary(meta: meta, hasMinutes: hasMinutes, preview: previewText(id: meta.id))
+            )
         }
         return summaries.sorted { $0.meta.startedAt > $1.meta.startedAt }
     }
@@ -155,6 +157,19 @@ public actor MeetingStore {
     }
 
     // MARK: - Private
+
+    /// 只读转写文件开头的一小段，取第一条作为列表预览，避免长会议整文件解析。
+    private func previewText(id: String) -> String? {
+        let url = directory(for: id).appendingPathComponent("transcript.jsonl")
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        let data = (try? handle.read(upToCount: 8_192)) ?? Data()
+        guard let line = data.split(separator: 0x0A, omittingEmptySubsequences: true).first,
+              let entry = try? decoder.decode(TranscriptEntry.self, from: Data(line))
+        else { return nil }
+        let text = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : String(text.prefix(90))
+    }
 
     private func directory(for id: String) -> URL {
         root.appendingPathComponent(id, isDirectory: true)

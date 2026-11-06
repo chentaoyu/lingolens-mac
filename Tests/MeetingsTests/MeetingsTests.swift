@@ -43,6 +43,19 @@ struct MeetingStoreTests {
         let list = try await store.list()
         #expect(list.count == 1)
         #expect(list[0].hasMinutes)
+        #expect(list[0].preview == "Hello")
+    }
+
+    @Test("没有转写时列表预览为空")
+    func listPreviewMissingWithoutEntries() async throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingStore(root: root)
+        _ = try await store.create(title: "空会议", languages: [.other: "en"])
+
+        let list = try await store.list()
+        #expect(list.count == 1)
+        #expect(list.first?.preview == nil)
     }
 
     @Test("编辑单条转写")

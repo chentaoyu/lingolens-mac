@@ -94,3 +94,70 @@
 4. 打开“记录会议”，进行一段对话，停止后在会议页检查转写、搜索、编辑。
 5. 选择模板与输出语言，生成纪要；确认流式输出、停止、重新生成、复制与保存。
 6. 外放场景检查 voice processing 是否抑制了对方声音的重复转写。
+
+## 6. 修复记录（2026-11-06）
+
+### 实时字幕只在停止后一次性出现
+
+现象：开始音频会话后能听到声音、电平条也在跳，但字幕浮窗长时间没有文字，停止后才一次性出现。
+
+原因：`SpeechTranscriptionSession` 创建 `SpeechTranscriber` 时用的是自定义选项
+`transcriptionOptions: []、reportingOptions: [.volatileResults]`。这套选项能正常出结果，但要等到
+end-of-input（`finalizeAndFinishThroughEndOfInput`）才把结果吐出来，等于把流式识别退化成了批处理。
+对照实验：同样的音频、同样的实时喂入节奏，`preset: .progressiveTranscription` 会在说话过程中持续产出
+volatile 结果，自定义空选项直到结束才产出。
+
+修复：改用 `SpeechTranscriber(locale:preset:.progressiveTranscription)`。
+
+顺带：
+- 新增 `TranscriptionLog`（`~/Library/Logs/LingoLens/transcriber.log`），记录每路会话的语言/格式、
+  缓冲计数、转换失败、结果到达与结束原因；菜单栏应用没有控制台，这类问题没有日志只能靠猜。
+- 输入格式变化时重建 `AudioFormatConverter`，避免切换设备后静默丢包。
+
+### 实时字幕一直停在「等待语音…」（电平条却在跳）
+
+现象：菜单栏开始音频会话后，电平条正常起伏、说明麦克风采到了声音，但字幕浮窗始终是
+「等待语音…（在菜单栏开始音频会话）」。
+
+原因：内建麦克风是三麦克风阵列（3 声道）。开启 voice processing 后，输入节点的输出格式会变成
+**9 声道、`kAudioChannelLayoutTag_DiscreteInOrder` 布局**。这种离散布局没有声道标签，
+`AVAudioConverter` 把它降到单声道时不会报错：返回 `.haveData`、帧数也正常，但采样值全是 0。
+于是 `SpeechAnalyzer` 收到的是一段数字静音，永远不会出结果；而电平条算的是**转换前**的原始
+缓冲，所以看起来一切正常。
+
+日志特征（`transcriber.log`）：
+```
+[me] first buffer format=<... 9 ch, 48000 Hz, Float32, deinterleaved> frames=4800
+[me] buffers=600 outFrames=959824 convertFailures=0 results=0
+```
+`outFrames` 在涨、`convertFailures=0`、`results=0`，就是「转换成功但输出静音」。
+
+修复：`AudioFormatConverter` 在输入/输出声道数不一致时自己混音——逐声道求和取平均，
+再交给 `AVAudioConverter` 只做采样率与位深转换；同时加了静默兜底（输入有信号、输出全 0 时
+抛 `AudioConversionError.silentOutput`，写进日志而不是继续喂静音）。
+回归测试：`Tests/AudioCaptureTests` 里用 9 声道 `DiscreteInOrder` 缓冲断言转换成单声道后
+RMS 不为 0；用真实中文语音铺成 9 声道验证，修复前识别结果为 0 条，修复后逐字上屏。
+
+### Teams 会议里「对方的声音采集不到」+「一开音频会话音量就变小」
+
+现象：开着 Teams 开会时开始音频会话，对方说话的字幕完全没有；同时听感上 Teams 的音量
+被压低了，调 Teams 自己的音量也补不回来。
+
+原因：`MicrophoneCapture` 为了让外放不漏音，调用了
+`inputNode.setVoiceProcessingEnabled(true)`（AUVoiceIO）。实测 AUVoiceIO 和 Core Audio
+的进程 Tap 不能共存，而且会 duck「其它音频」：
+
+| 场景 | 系统音频 Tap |
+|---|---|
+| 只有 Tap | 正常，1.2s 收 120 个缓冲，RMS≈0.16 |
+| Tap → 普通 `AVAudioEngine`（不开 VP） | 正常，RMS≈0.14–0.23 |
+| Tap → VP 引擎 | **约 0.4s 后停止出数据**（正好是日志里 `[other] buffers=40`） |
+| VP 引擎 → 新建 Tap | **一帧都没有** |
+| VP 在另一个进程 | Tap 能收，但音量被 duck 到 RMS≈0.004（约 −32 dB） |
+
+所以：对方的声音不是没采，是被 VP 掐断了；音量变小是 VP 的
+`voiceProcessingOtherAudioDuckingConfiguration` 默认 ducking 把「其它音频」压下去。
+
+修复：`MicrophoneCapture` **不再开启 voice processing**，让回音消除让位给系统音频采集。
+代价：外放时对方的声音会从麦克风串进来（`me` 通道可能重复转写对方的话），**建议开会戴耳机**。
+如果以后要做回音消除，必须同时换掉系统音频的采集方式（VP 与进程 Tap 不能共存）。

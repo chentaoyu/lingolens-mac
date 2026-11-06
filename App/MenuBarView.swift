@@ -1,4 +1,5 @@
 import AppKit
+import AudioCapture
 import LiveSubtitle
 import SelectionTranslate
 import Settings
@@ -10,6 +11,46 @@ struct MenuBarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if let toast = environment.toast {
+                ToastBanner(
+                    toast: toast,
+                    onAction: { action in
+                        closePanel()
+                        environment.performToastAction(action)
+                    },
+                    onDismiss: environment.dismissToast
+                )
+            }
+
+            if let error = environment.lastError {
+                Button {
+                    environment.clearError()
+                } label: {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.danger)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(error.title)
+                                .font(.system(size: 11, weight: .semibold))
+                            Text(error.message)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        Spacer(minLength: 4)
+                        Text("知道了")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(8)
+                    .background(Color.danger.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("错误：\(error.title)，点击关闭提示")
+            }
+
             modelStatus
             SessionCard(
                 session: environment.audioSession,
@@ -112,6 +153,14 @@ private struct SessionCard: View {
 
             statusLine
 
+            if session.state == .running {
+                levelMeters
+            }
+
+            if panel.isVisible {
+                subtitleLink
+            }
+
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
                 GridRow {
                     label("音频源")
@@ -155,12 +204,12 @@ private struct SessionCard: View {
         switch session.state {
         case let .failed(message):
             Label(message, systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(.red)
+                .foregroundStyle(Color.danger)
                 .font(.caption)
         case .running, .starting:
             HStack(spacing: 6) {
                 if session.isRecordingMeeting {
-                    Circle().fill(.red).frame(width: 6, height: 6)
+                    Circle().fill(Color.danger).frame(width: 6, height: 6)
                     Text("记录中 ·")
                 }
                 Text(session.statusText)
@@ -174,6 +223,53 @@ private struct SessionCard: View {
         case .idle:
             EmptyView()
         }
+    }
+
+    /// 两路电平：让用户一眼确认「到底有没有采到声音」。
+    private var levelMeters: some View {
+        VStack(spacing: 5) {
+            ForEach(AudioChannel.allCases, id: \.self) { channel in
+                if session.activeLanguages[channel] != nil {
+                    HStack(spacing: 8) {
+                        Text(channel.displayName)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(channel.color)
+                            .frame(width: 22, alignment: .leading)
+                        AudioLevelMeter(
+                            level: CGFloat(session.levels[channel] ?? 0),
+                            tint: channel.color
+                        )
+                        .frame(maxWidth: 170, alignment: .leading)
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 2)
+    }
+
+    /// 字幕浮窗已经在显示时，给一个「过去看一眼」的入口。
+    private var subtitleLink: some View {
+        Button {
+            closePanel()
+            panel.show()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "captions.bubble.fill")
+                Text("字幕浮窗正在显示")
+                Spacer()
+                Text("查看浮窗")
+                Image(systemName: "arrow.up.forward.app")
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("把字幕浮窗移到最前面")
     }
 
     private var isActive: Bool {
@@ -219,6 +315,28 @@ private struct SessionCard: View {
                 settingsStore.update { $0.audioSession[keyPath: keyPath] = value }
             }
         )
+    }
+}
+
+/// 分段电平指示：亮起段数跟随电平，颜色沿用说话人配色。
+private struct AudioLevelMeter: View {
+    let level: CGFloat
+    let tint: Color
+
+    private let segments = 10
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(0..<segments, id: \.self) { index in
+                let threshold = CGFloat(index + 1) / CGFloat(segments)
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(level >= threshold ? tint : Color.secondary.opacity(0.16))
+                    .frame(height: 10)
+            }
+        }
+        .frame(height: 12)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("音量 \(Int(level * 100))%")
     }
 }
 

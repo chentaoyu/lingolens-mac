@@ -19,6 +19,26 @@
       "target": "LingoLens",
       "configuration": "release",
       "preLaunchTask": "swift: Build Release LingoLens"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:lingolens-mac}",
+      "name": "Debug ASRDebug",
+      "target": "ASRDebug",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug ASRDebug"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:lingolens-mac}",
+      "name": "Release ASRDebug",
+      "target": "ASRDebug",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release ASRDebug"
     }
   ]
 }

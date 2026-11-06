@@ -33,6 +33,8 @@ final class AppEnvironment: ObservableObject {
     let templateStore: MinutesTemplateStore
     let minutesGenerator: MinutesGenerator
     let audioSession: AudioSessionController
+    /// 模型下载进度：模型页与下载面板共用。
+    let downloadState = ModelDownloadState()
 
     @Published private(set) var settings: AppSettings
     @Published private(set) var models: [ModelRecord] = []
@@ -42,13 +44,23 @@ final class AppEnvironment: ObservableObject {
     @Published private(set) var isRefreshing = false
     @Published private(set) var isInstallingRuntime = false
     @Published private(set) var meetingsRevision = 0
-    @Published var lastError: String?
+    @Published private(set) var lastError: AppError?
     /// 主窗口当前页；菜单栏等入口可直接跳转。
     @Published var mainTab: MainTab = .home
     /// 跳到会议页时要选中的会议。
     @Published var focusMeetingID: String?
+    /// 操作回执（例如会话结束后的「会议已保存」）。
+    @Published private(set) var toast: AppToast?
+    /// 首次启动引导是否展示中。
+    @Published var isOnboardingPresented = false
+    /// 有新的会议记录但用户还没打开会议页，侧边栏显示一个小圆点。
+    @Published var hasUnseenMeetings = false
+
+    /// 引导完成标记；AppDelegate 在首次启动时据此决定要不要弹引导。
+    nonisolated static let didFinishOnboardingKey = "LingoLens.didFinishOnboarding"
 
     private var started = false
+    private var toastTask: Task<Void, Never>?
     private var statusTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
 
@@ -127,8 +139,15 @@ final class AppEnvironment: ObservableObject {
             }
             .store(in: &cancellables)
 
+        downloadState.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+
         audioSession.onSessionFinished = { [weak self] in
             self?.meetingsRevision += 1
+            self?.hasUnseenMeetings = true
         }
 
         observeRuntimeProgress()
@@ -175,7 +194,52 @@ final class AppEnvironment: ObservableObject {
     }
 
     func stopAudioSession() async {
-        await audioSession.stop()
+        guard let meeting = await audioSession.stop() else { return }
+        showToast(
+            AppToast(
+                title: "会议已保存",
+                subtitle: "「\(meeting.title)」的转写已保存，可以立即生成纪要。",
+                actionTitle: "查看会议",
+                action: .openMeeting(meeting.id)
+            )
+        )
+    }
+
+    // MARK: - 首次启动引导
+
+    func presentOnboarding() {
+        isOnboardingPresented = true
+    }
+
+    func finishOnboarding() {
+        UserDefaults.standard.set(true, forKey: Self.didFinishOnboardingKey)
+        isOnboardingPresented = false
+    }
+
+    // MARK: - 操作回执
+
+    func showToast(_ toast: AppToast, autoDismissAfter seconds: Double = 6) {
+        toastTask?.cancel()
+        self.toast = toast
+        toastTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard !Task.isCancelled else { return }
+            self?.toast = nil
+        }
+    }
+
+    func dismissToast() {
+        toastTask?.cancel()
+        toastTask = nil
+        toast = nil
+    }
+
+    func performToastAction(_ action: AppToast.Action) {
+        dismissToast()
+        switch action {
+        case let .openMeeting(id):
+            showMainWindow(.meetings, meetingID: id)
+        }
     }
 
     // MARK: - 会议
@@ -245,7 +309,12 @@ final class AppEnvironment: ObservableObject {
         } catch {
             runtimeInstalled = false
             runtimeProgress = InstallProgress(phase: .failed, message: error.localizedDescription)
-            lastError = error.localizedDescription
+            report(error, title: "运行时安装失败", code: "RUNTIME_INSTALL", actions: [
+                AppError.Action("查看日志") { self.openLogsFolder() },
+                AppError.Action("重试", isPrimary: true) {
+                    Task { await self.installRuntime(force: true) }
+                },
+            ])
         }
     }
 
@@ -288,7 +357,9 @@ final class AppEnvironment: ObservableObject {
             _ = try await catalog.importModel(at: url)
             models = await catalog.all()
         } catch {
-            lastError = error.localizedDescription
+            report(error, title: "无法导入这个模型", code: "MODEL_IMPORT", actions: [
+                AppError.Action("打开模型目录") { self.openAppSupportFolder() },
+            ])
         }
     }
 
@@ -307,7 +378,9 @@ final class AppEnvironment: ObservableObject {
         do {
             try await catalog.remove(id: record.id)
         } catch {
-            lastError = error.localizedDescription
+            report(error, title: "删除模型失败", code: "MODEL_REMOVE", actions: [
+                AppError.Action("在 Finder 中显示") { self.revealInFinder(record) },
+            ])
         }
         if settings.residentModelID == record.id {
             setResidentModelID(nil)
@@ -377,7 +450,12 @@ final class AppEnvironment: ObservableObject {
         do {
             _ = try await serverPool.ensure(model: runtimeRef(for: record), config: launchConfig(for: record))
         } catch {
-            lastError = error.localizedDescription
+            report(error, title: "模型服务启动失败", code: "SERVER_START", actions: [
+                AppError.Action("查看日志") { self.openLog(for: record) },
+                AppError.Action("重试", isPrimary: true) {
+                    Task { await self.startServer(for: record) }
+                },
+            ])
         }
         await refreshServers()
     }
@@ -391,7 +469,9 @@ final class AppEnvironment: ObservableObject {
         do {
             _ = try await serverPool.restart(modelID: record.id)
         } catch {
-            lastError = error.localizedDescription
+            report(error, title: "模型服务重启失败", code: "SERVER_RESTART", actions: [
+                AppError.Action("查看日志") { self.openLog(for: record) },
+            ])
         }
         await refreshServers()
     }
@@ -510,7 +590,16 @@ final class AppEnvironment: ObservableObject {
         guard let text = NSPasteboard.general.string(forType: .string),
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
-            lastError = "剪贴板里没有可翻译的文本。"
+            reportMessage(
+                "剪贴板里没有可翻译的文本。先复制一段文字，或手动输入。",
+                title: "没有可翻译的内容",
+                code: "CLIPBOARD_EMPTY",
+                actions: [
+                    AppError.Action("手动输入", isPrimary: true) {
+                        self.coordinator.openManualPanel()
+                    },
+                ]
+            )
             return
         }
         coordinator.translate(text: text)
@@ -522,7 +611,31 @@ final class AppEnvironment: ObservableObject {
         MainWindowController.shared.show()
     }
 
+    // MARK: - 错误上报
+
+    func report(
+        _ error: Error,
+        title: String = "出错了",
+        code: String? = nil,
+        actions: [AppError.Action] = []
+    ) {
+        lastError = AppError(title: title, message: error.localizedDescription, code: code, actions: actions)
+    }
+
+    func reportMessage(
+        _ message: String,
+        title: String = "出错了",
+        code: String? = nil,
+        actions: [AppError.Action] = []
+    ) {
+        lastError = AppError(title: title, message: message, code: code, actions: actions)
+    }
+
     func clearError() {
         lastError = nil
+    }
+
+    func markMeetingsSeen() {
+        hasUnseenMeetings = false
     }
 }

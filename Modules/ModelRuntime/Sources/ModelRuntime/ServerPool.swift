@@ -120,6 +120,8 @@ public actor ServerPool {
 
     private var entries: [String: Entry] = [:]
     private var idleTimer: Task<Void, Never>?
+    /// 已经进入关机流程：此后不再拉起任何新进程，避免退出时留下孤儿服务。
+    private var isShuttingDown = false
     private var snapshotObserver: (@Sendable ([ServerSnapshot]) -> Void)?
 
     public init(
@@ -182,6 +184,7 @@ public actor ServerPool {
 
     /// 确保模型服务已就绪并返回 baseURL。使用同一模型的多次调用共享同一个启动过程。
     public func ensure(model: ModelRef, config: ServerLaunchConfig) async throws -> URL {
+        guard !isShuttingDown else { throw CancellationError() }
         if var entry = entries[model.id] {
             if case let .ready(url) = entry.state {
                 entry.lastUsed = now()
@@ -329,11 +332,17 @@ public actor ServerPool {
     }
 
     public func shutdown() async {
+        isShuttingDown = true
         idleTimer?.cancel()
         idleTimer = nil
-        let modelIDs = Array(entries.keys)
-        for modelID in modelIDs {
-            await stop(modelID: modelID, reason: "shutdown")
+        // 两轮：第一轮停已登记的进程；第二轮兜住关机瞬间才登记上的进程。
+        for _ in 0..<2 {
+            for modelID in Array(entries.keys) {
+                await stop(modelID: modelID, reason: "shutdown")
+            }
+            if entries.values.allSatisfy({ $0.process == nil }) {
+                break
+            }
         }
     }
 
@@ -353,6 +362,8 @@ public actor ServerPool {
         do {
             try checkMemory(for: model)
             let pythonExecutable = try await python.ensureInstalled()
+            // 等待安装期间可能已经开始关机：这时不能再拉起新进程。
+            if Task.isCancelled || isShuttingDown { throw CancellationError() }
             let port = try portAllocator()
             guard let baseURL = URL(string: "http://127.0.0.1:\(port)") else {
                 throw RuntimeError.portUnavailable

@@ -13,8 +13,13 @@ public actor SpeechTranscriptionSession {
     private var resultsTask: Task<Void, Never>?
     private var eventContinuation: AsyncStream<TranscriptionEvent>.Continuation?
     private var converter: AudioFormatConverter?
+    private var converterFormat: AVAudioFormat?
     private var analyzerFormat: AVAudioFormat?
     private var lastText: String = ""
+    private var bufferCount = 0
+    private var convertedFrames: AVAudioFrameCount = 0
+    private var conversionFailures = 0
+    private var resultCount = 0
 
     public init(channel: AudioChannel) {
         self.channel = channel
@@ -25,12 +30,9 @@ public actor SpeechTranscriptionSession {
         await finish()
 
         let locale = try await SpeechAssetManager.ensureInstalled(localeIdentifier: localeIdentifier)
-        let transcriber = SpeechTranscriber(
-            locale: locale,
-            transcriptionOptions: [],
-            reportingOptions: [.volatileResults],
-            attributeOptions: []
-        )
+        // 必须用 progressiveTranscription 预设：自定义的空 options 虽然能出结果，
+        // 但要等 end-of-input 才一次性吐出，实时字幕就变成「说完整段才出现」。
+        let transcriber = SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
 
         guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
             ?? AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)
@@ -47,10 +49,19 @@ public actor SpeechTranscriptionSession {
         self.analyzer = analyzer
         self.analyzerFormat = format
         self.converter = nil
+        self.converterFormat = nil
+        self.bufferCount = 0
+        self.convertedFrames = 0
+        self.conversionFailures = 0
+        self.resultCount = 0
+        TranscriptionLog.write(
+            "[\(channel.rawValue)] start locale=\(locale.identifier) analyzerFormat=\(format)"
+        )
         self.eventContinuation = eventContinuation
         self.inputContinuation = inputContinuation
         self.lastText = ""
 
+        let channelName = channel.rawValue
         resultsTask = Task { [weak self] in
             do {
                 for try await result in transcriber.results {
@@ -62,12 +73,19 @@ public actor SpeechTranscriptionSession {
                 }
             } catch {
                 // 结果流异常结束时不阻塞上层；会话会通过 finish 收尾。
+                TranscriptionLog.write("[\(channelName)] results error: \(error)")
             }
+            TranscriptionLog.write("[\(channelName)] results stream ended")
             await self?.closeEvents()
         }
 
+        // 不要继承会话 actor：分析器需要独立调度，否则在实时喂音频时结果会积压到结束才出来。
         analysisTask = Task {
-            try await analyzer.analyzeSequence(inputs)
+            do {
+                _ = try await analyzer.analyzeSequence(inputs)
+            } catch {
+                TranscriptionLog.write("[\(channelName)] analyze error: \(error)")
+            }
         }
 
         return events
@@ -76,19 +94,51 @@ public actor SpeechTranscriptionSession {
     public func append(_ buffer: AVAudioPCMBuffer) {
         guard let inputContinuation, let analyzerFormat else { return }
 
+        bufferCount += 1
+        if bufferCount == 1 {
+            TranscriptionLog.write(
+                "[\(channel.rawValue)] first buffer format=\(buffer.format) frames=\(buffer.frameLength)"
+            )
+        }
+
         if Self.matches(buffer.format, analyzerFormat) {
             inputContinuation.yield(AnalyzerInput(buffer: buffer))
+            logProgressIfNeeded()
             return
         }
 
-        if converter == nil {
+        // 输入格式偶尔会变（例如切换设备），变了就重建转换器。
+        if converter == nil || !Self.matches(converterFormat ?? buffer.format, buffer.format) {
             converter = AudioFormatConverter(from: buffer.format, to: analyzerFormat)
+            converterFormat = buffer.format
         }
-        guard let converter, let converted = try? converter.convert(buffer) else { return }
-        inputContinuation.yield(AnalyzerInput(buffer: converted))
+        do {
+            guard let converter else { return }
+            let converted = try converter.convert(buffer)
+            convertedFrames += converted.frameLength
+            inputContinuation.yield(AnalyzerInput(buffer: converted))
+        } catch {
+            conversionFailures += 1
+            if conversionFailures <= 3 {
+                TranscriptionLog.write("[\(channel.rawValue)] convert failed: \(error)")
+            }
+        }
+        logProgressIfNeeded()
+    }
+
+    private func logProgressIfNeeded() {
+        guard bufferCount % 200 == 0 else { return }
+        TranscriptionLog.write(
+            "[\(channel.rawValue)] buffers=\(bufferCount) outFrames=\(convertedFrames) convertFailures=\(conversionFailures) results=\(resultCount)"
+        )
     }
 
     public func finish() async {
+        if bufferCount > 0 {
+            TranscriptionLog.write(
+                "[\(channel.rawValue)] finish buffers=\(bufferCount) outFrames=\(convertedFrames) failures=\(conversionFailures) results=\(resultCount)"
+            )
+        }
         inputContinuation?.finish()
         inputContinuation = nil
 
@@ -122,6 +172,12 @@ public actor SpeechTranscriptionSession {
 
     private func emit(text: String, isFinal: Bool) {
         lastText = text
+        resultCount += 1
+        if isFinal || resultCount <= 3 {
+            TranscriptionLog.write(
+                "[\(channel.rawValue)] result final=\(isFinal) chars=\(text.count) text=\(text.prefix(40))"
+            )
+        }
         eventContinuation?.yield(
             TranscriptionEvent(channel: channel, text: text, isFinal: isFinal)
         )

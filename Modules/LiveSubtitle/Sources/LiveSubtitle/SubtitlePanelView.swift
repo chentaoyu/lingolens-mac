@@ -8,6 +8,7 @@ public struct SubtitlePanelView: View {
     private let onToggleClickThrough: () -> Void
 
     @State private var isHovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(
         model: SubtitlePanelModel,
@@ -37,8 +38,11 @@ public struct SubtitlePanelView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                .animation(.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.24), value: lines.map(\.id))
-                .animation(.easeInOut(duration: 0.18), value: lines)
+                .animation(
+                    reduceMotion ? nil : .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.24),
+                    value: lines.map(\.id)
+                )
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: lines)
             }
         }
         .padding(14)
@@ -52,7 +56,11 @@ public struct SubtitlePanelView: View {
                 .strokeBorder(Color.white.opacity(0.08))
         )
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.18)) { isHovering = hovering }
+            if reduceMotion {
+                isHovering = hovering
+            } else {
+                withAnimation(.easeInOut(duration: 0.18)) { isHovering = hovering }
+            }
         }
         .environment(\.colorScheme, .dark)
     }

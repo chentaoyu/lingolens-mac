@@ -6,6 +6,8 @@ struct LingoLensApp: App {
     @StateObject private var environment = AppEnvironment.shared
 
     var body: some Scene {
+        // 主窗口统一由 MainWindowController 创建，避免 SwiftUI Window 场景
+        // 和 AppKit 窗口两套生命周期互相打架（标题、尺寸、关闭行为不一致）。
         MenuBarExtra {
             MenuBarView()
                 .environmentObject(environment)
@@ -13,15 +15,5 @@ struct LingoLensApp: App {
             Label("LingoLens", systemImage: "character.bubble")
         }
         .menuBarExtraStyle(.window)
-
-        Window("LingoLens", id: "main") {
-            MainWindowView()
-                .environmentObject(environment)
-        }
-        .defaultSize(width: 940, height: 660)
-        .windowResizability(.contentMinSize)
-        .commands {
-            CommandGroup(replacing: .newItem) {}
-        }
     }
 }

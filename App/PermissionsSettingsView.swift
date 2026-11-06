@@ -73,7 +73,7 @@ struct PermissionsSettingsView: View {
     ) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: granted ? "checkmark.circle.fill" : "exclamationmark.circle")
-                .foregroundStyle(granted ? Color.green : Color.orange)
+                .foregroundStyle(granted ? Color.success : Color.warning)
                 .padding(.top, 2)
 
             VStack(alignment: .leading, spacing: 3) {

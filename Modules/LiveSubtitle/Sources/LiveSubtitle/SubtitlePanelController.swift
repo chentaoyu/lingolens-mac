@@ -18,6 +18,8 @@ public final class SubtitlePanelController: ObservableObject {
     private var model: SubtitlePanelModel?
     private var panel: SubtitlePanel?
     private var cancellables = Set<AnyCancellable>()
+    private var frameObservers: [NSObjectProtocol] = []
+    private let frameDefaultsKey = "subtitlePanelFrame"
 
     public init(store: SubtitleStore, settingsStore: SettingsStore) {
         self.store = store
@@ -31,12 +33,13 @@ public final class SubtitlePanelController: ObservableObject {
         // 首次显示放到屏幕底部；之后保留用户拖动后的位置和大小。
         // 需在 orderFront 之后设置，否则首次布局会把窗口收缩成内容尺寸。
         if isFirstShow {
-            position(panel)
+            restoreOrPosition(panel)
         }
         isVisible = true
     }
 
     public func hide() {
+        saveFrame()
         panel?.orderOut(nil)
         isVisible = false
     }
@@ -93,6 +96,7 @@ public final class SubtitlePanelController: ObservableObject {
 
         self.model = model
         self.panel = panel
+        observeFrame(panel)
 
         settingsStore.$settings
             .map(\.subtitle)
@@ -103,6 +107,36 @@ public final class SubtitlePanelController: ObservableObject {
             .store(in: &cancellables)
 
         return panel
+    }
+
+    /// 恢复用户上次拖动后的位置；窗口可能已经不在任何屏幕上（外接屏拔掉），这时回到底部默认位置。
+    private func restoreOrPosition(_ panel: NSPanel) {
+        if let saved = UserDefaults.standard.string(forKey: frameDefaultsKey) {
+            let frame = NSRectFromString(saved)
+            if frame.width > 200, frame.height > 80,
+               NSScreen.screens.contains(where: { $0.visibleFrame.intersects(frame) }) {
+                panel.setFrame(frame, display: true)
+                return
+            }
+        }
+        position(panel)
+    }
+
+    private func observeFrame(_ panel: NSPanel) {
+        let center = NotificationCenter.default
+        for name in [NSWindow.didMoveNotification, NSWindow.didEndLiveResizeNotification] {
+            let token = center.addObserver(forName: name, object: panel, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.saveFrame()
+                }
+            }
+            frameObservers.append(token)
+        }
+    }
+
+    private func saveFrame() {
+        guard let panel, panel.isVisible else { return }
+        UserDefaults.standard.set(NSStringFromRect(panel.frame), forKey: frameDefaultsKey)
     }
 
     private func position(_ panel: NSPanel) {

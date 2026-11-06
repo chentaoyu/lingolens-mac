@@ -13,6 +13,9 @@ struct ModelsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 header
+                if environment.downloadState.isActive {
+                    ModelDownloadCard(state: environment.downloadState, environment: environment)
+                }
                 runtimeBanner
                 residentSection
                 modelsSection
@@ -25,12 +28,11 @@ struct ModelsView: View {
             case let .success(url):
                 Task { await environment.importModel(at: url) }
             case let .failure(error):
-                environment.lastError = error.localizedDescription
+                environment.report(error, title: "无法导入这个模型", code: "MODEL_IMPORT")
             }
         }
         .sheet(isPresented: $showDownload) {
-            DownloadSheet()
-                .environmentObject(environment)
+            DownloadSheet(state: environment.downloadState, environment: environment)
         }
     }
 
@@ -66,11 +68,15 @@ struct ModelsView: View {
         }
     }
 
+    private var totalDiskSize: Int64 {
+        environment.models.reduce(Int64(0)) { $0 + ($1.info?.diskSizeBytes ?? 0) }
+    }
+
     private var runtimeBanner: some View {
         HStack(spacing: 12) {
             Image(systemName: environment.runtimeInstalled ? "checkmark.seal.fill" : "shippingbox")
                 .font(.system(size: 20))
-                .foregroundStyle(environment.runtimeInstalled ? Color.green : Color.orange)
+                .foregroundStyle(environment.runtimeInstalled ? Color.success : Color.warning)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(environment.runtimeInstalled ? "Python 运行时已就绪" : "准备 Python 运行时")
@@ -159,13 +165,18 @@ struct ModelsView: View {
 
     private var modelsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("模型")
+            HStack(spacing: 8) {
+                Text("已安装")
                     .font(.system(size: 13, weight: .semibold))
-                Text("\(environment.models.count) 个")
+                Text("\(environment.models.count)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
+                if totalDiskSize > 0 {
+                    Text("占用 \(formatBytes(UInt64(totalDiskSize)))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             if environment.models.isEmpty {
@@ -228,13 +239,13 @@ struct ModelsView: View {
                             if snapshot.restartCount > 0 {
                                 Text("重启 \(snapshot.restartCount)")
                                     .font(.caption2)
-                                    .foregroundStyle(.orange)
+                                    .foregroundStyle(Color.warning)
                             }
                             Spacer()
                             if case let .failed(message) = snapshot.state {
                                 Text(message)
                                     .font(.caption2)
-                                    .foregroundStyle(.red)
+                                    .foregroundStyle(Color.danger)
                                     .lineLimit(1)
                             }
                         }
@@ -279,9 +290,9 @@ private struct ModelRow: View {
                         TagBadge(text: "常驻", color: .accentColor)
                     }
                     if !record.isAvailable {
-                        TagBadge(text: "不可用", color: .orange)
+                        TagBadge(text: "不可用", color: Color.warning)
                     } else if memoryFit == .insufficient {
-                        TagBadge(text: "内存不足", color: .red)
+                        TagBadge(text: "内存不足", color: Color.danger)
                     }
                     TagBadge(text: record.sourceLabel, color: .secondary)
                 }
@@ -300,7 +311,7 @@ private struct ModelRow: View {
                 VStack(alignment: .trailing, spacing: 3) {
                     Text("\(formatBytes(UInt64(bytes))) / \(formatBytes(ProcessInfo.processInfo.physicalMemory))")
                         .font(.caption2)
-                        .foregroundStyle(memoryFit == .insufficient ? .red : .secondary)
+                        .foregroundStyle(memoryFit == .insufficient ? Color.danger : .secondary)
                     MemoryMeter(bytes: bytes, showsLabel: false)
                 }
                 .frame(width: 130)
@@ -355,6 +366,96 @@ private struct ModelRow: View {
     }
 }
 
+/// 页内下载卡：从 sheet 发起后仍留在页面上，可暂停/继续/取消。
+private struct ModelDownloadCard: View {
+    @ObservedObject var state: ModelDownloadState
+    let environment: AppEnvironment
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.down.circle")
+                    .font(.title3)
+                    .foregroundStyle(.tint)
+                    .frame(width: 32, height: 32)
+                    .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(state.repoID)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                    Text(detailText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                if state.isDownloading, let fraction = state.progress?.fileFraction {
+                    Text("\(Int(fraction * 100))%")
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+
+                Button(state.isPaused ? "继续" : "暂停") {
+                    if state.isPaused {
+                        state.resume(environment: environment)
+                    } else {
+                        state.pause()
+                    }
+                }
+                .controlSize(.small)
+                .disabled(!state.isDownloading && !state.isPaused)
+
+                Button("取消") { state.cancel() }
+                    .controlSize(.small)
+                    .buttonStyle(.link)
+            }
+
+            if state.isDownloading || state.isPaused {
+                if let fraction = state.progress?.fileFraction {
+                    ProgressView(value: fraction)
+                } else {
+                    ProgressView().progressViewStyle(.linear)
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.secondary.opacity(0.06))
+        )
+    }
+
+    private var detailText: String {
+        switch state.phase {
+        case .paused:
+            return "下载已暂停，继续后从断点续传"
+        case .finished:
+            return "下载完成，可在下方列表中设为常驻模型"
+        case let .failed(message):
+            return "下载失败：\(message)"
+        case .idle:
+            return ""
+        case .downloading:
+            guard let progress = state.progress else { return "正在获取文件列表…" }
+            var parts = ["文件 \(progress.fileIndex + 1)/\(progress.fileCount)"]
+            if let total = progress.fileTotalBytes {
+                parts.append("\(formatBytes(UInt64(max(0, progress.fileBytesDownloaded)))) / \(formatBytes(UInt64(total)))")
+            }
+            if let speed = state.bytesPerSecond, speed > 0 {
+                parts.append(formatBytes(UInt64(speed)) + "/s")
+            }
+            if let remaining = state.remainingSeconds {
+                parts.append(remaining < 60 ? "剩余 \(Int(remaining)) 秒" : "剩余约 \(Int(remaining / 60) + 1) 分钟")
+            }
+            return parts.joined(separator: " · ")
+        }
+    }
+}
+
 struct ServerStateBadge: View {
     let state: ServerState
 
@@ -385,9 +486,9 @@ struct ServerStateBadge: View {
     private var color: Color {
         switch state {
         case .stopped: return .secondary
-        case .starting, .stopping: return .orange
-        case .ready: return .green
-        case .failed: return .red
+        case .starting, .stopping: return Color.warning
+        case .ready: return Color.success
+        case .failed: return Color.danger
         }
     }
 

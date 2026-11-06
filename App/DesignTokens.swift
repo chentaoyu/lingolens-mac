@@ -4,4 +4,7 @@ import SwiftUI
 extension Color {
     static let speakerMe = Color("SpeakerMe")
     static let speakerOther = Color("SpeakerOther")
+    static let success = Color("Success")
+    static let warning = Color("Warning")
+    static let danger = Color("Danger")
 }
