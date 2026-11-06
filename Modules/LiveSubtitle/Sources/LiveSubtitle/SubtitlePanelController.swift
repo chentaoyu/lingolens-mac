@@ -25,9 +25,14 @@ public final class SubtitlePanelController: ObservableObject {
     }
 
     public func show() {
+        let isFirstShow = panel == nil
         let panel = ensurePanel()
-        position(panel)
         panel.orderFrontRegardless()
+        // 首次显示放到屏幕底部；之后保留用户拖动后的位置和大小。
+        // 需在 orderFront 之后设置，否则首次布局会把窗口收缩成内容尺寸。
+        if isFirstShow {
+            position(panel)
+        }
         isVisible = true
     }
 
@@ -51,6 +56,9 @@ public final class SubtitlePanelController: ObservableObject {
         if let panel { return panel }
 
         let model = SubtitlePanelModel(store: store, settings: settingsStore.settings.subtitle)
+        model.onUpdateSettings = { [weak settingsStore] subtitle in
+            settingsStore?.update { $0.subtitle = subtitle }
+        }
         let view = SubtitlePanelView(
             model: model,
             store: store,
@@ -58,6 +66,8 @@ public final class SubtitlePanelController: ObservableObject {
             onToggleClickThrough: { [weak self] in self?.toggleClickThrough() }
         )
         let hosting = NSHostingView(rootView: view)
+        // 不随内容理想尺寸自动缩放窗口，尺寸由面板自身决定。
+        hosting.sizingOptions = []
 
         let panel = SubtitlePanel(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 240),

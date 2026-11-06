@@ -39,6 +39,10 @@ struct MeetingsView: View {
         .onDisappear {
             generationTask?.cancel()
         }
+        .onChange(of: environment.focusMeetingID) { _, newValue in
+            guard newValue != nil else { return }
+            Task { await reload() }
+        }
         .onChange(of: environment.meetingsRevision) { _, _ in
             Task { await reload() }
         }
@@ -324,7 +328,10 @@ struct MeetingsView: View {
             selectedTemplateID = templates.first(where: { $0.id == MinutesTemplate.standardID })?.id
                 ?? templates.first?.id
         }
-        if selectedID == nil {
+        if let focus = environment.focusMeetingID {
+            environment.focusMeetingID = nil
+            selectedID = focus
+        } else if selectedID == nil {
             selectedID = meetings.first?.id
         }
         if let selectedID {

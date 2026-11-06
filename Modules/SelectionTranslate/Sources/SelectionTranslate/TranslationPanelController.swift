@@ -38,6 +38,8 @@ public final class TranslationPanelController {
         let panel = ensurePanel()
         guard let model else { return }
 
+        let wasVisible = panel.isVisible
+        model.targetOverride = nil
         if let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             model.originalText = text
             model.retranslate()
@@ -46,8 +48,18 @@ public final class TranslationPanelController {
         }
 
         position(panel, near: point ?? NSEvent.mouseLocation)
+        if !wasVisible {
+            panel.alphaValue = 0
+        }
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
+        if !wasVisible {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.15
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                panel.animator().alphaValue = 1
+            }
+        }
     }
 
     public func hide() {
@@ -73,9 +85,11 @@ public final class TranslationPanelController {
             self?.hide()
         }
         let hostingView = NSHostingView(rootView: view)
+        // 不随内容理想尺寸自动缩放窗口，尺寸由面板自身决定。
+        hostingView.sizingOptions = []
 
         let panel = TranslationPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 280),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 280),
             styleMask: [.nonactivatingPanel, .titled, .closable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false

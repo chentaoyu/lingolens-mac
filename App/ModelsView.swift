@@ -282,7 +282,7 @@ private struct ModelRow: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if let info = record.info {
-                        Text(infoSummary(info))
+                        Text(info.summary)
                     }
                 }
                 .font(.caption)
@@ -328,34 +328,6 @@ private struct ModelRow: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-    }
-
-    private func infoSummary(_ info: ModelInfo) -> String {
-        var parts: [String] = []
-        if let parameters = info.parameterCount {
-            parts.append(parameterCountString(parameters))
-        }
-        if let bits = info.quantizationBits {
-            parts.append("\(bits)-bit")
-        }
-        parts.append(formatBytes(UInt64(max(0, info.diskSizeBytes))))
-        if info.estimatedMemoryBytes > 0 {
-            parts.append("约需 " + formatBytes(UInt64(info.estimatedMemoryBytes)))
-        }
-        if info.supportsVision {
-            parts.append("视觉")
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    private func parameterCountString(_ count: Int64) -> String {
-        if count >= 1_000_000_000 {
-            return String(format: "%.1fB", Double(count) / 1_000_000_000)
-        }
-        if count >= 1_000_000 {
-            return String(format: "%.0fM", Double(count) / 1_000_000)
-        }
-        return "\(count)"
     }
 }
 
@@ -411,5 +383,35 @@ struct TagBadge: View {
             .padding(.vertical, 1)
             .background(Capsule().fill(color.opacity(0.16)))
             .foregroundStyle(color)
+    }
+}
+
+extension ModelInfo {
+    var summary: String {
+        var parts: [String] = []
+        if let parameters = parameterCount {
+            parts.append(Self.parameterCountString(parameters))
+        }
+        if let bits = quantizationBits {
+            parts.append("\(bits)-bit")
+        }
+        parts.append(formatBytes(UInt64(max(0, diskSizeBytes))))
+        if estimatedMemoryBytes > 0 {
+            parts.append("约需 " + formatBytes(UInt64(estimatedMemoryBytes)))
+        }
+        if supportsVision {
+            parts.append("视觉")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private static func parameterCountString(_ count: Int64) -> String {
+        if count >= 1_000_000_000 {
+            return String(format: "%.1fB", Double(count) / 1_000_000_000)
+        }
+        if count >= 1_000_000 {
+            return String(format: "%.0fM", Double(count) / 1_000_000)
+        }
+        return "\(count)"
     }
 }

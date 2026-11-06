@@ -20,6 +20,7 @@ final class AudioSessionController: ObservableObject {
     @Published private(set) var statusText = "未开始"
     @Published private(set) var isRecordingMeeting = false
     @Published private(set) var activeLanguages: [AudioChannel: String] = [:]
+    @Published private(set) var startedAt: Date?
 
     /// 会话结束后通知界面刷新会议列表。
     var onSessionFinished: (() -> Void)?
@@ -117,6 +118,7 @@ final class AudioSessionController: ObservableObject {
             }
 
             state = .running
+            startedAt = Date()
             if capture.warnings.isEmpty {
                 statusText = "字幕运行中"
             } else {
@@ -151,6 +153,7 @@ final class AudioSessionController: ObservableObject {
         currentMeeting = nil
         isRecordingMeeting = false
         activeLanguages = [:]
+        startedAt = nil
         state = .idle
         statusText = "已停止"
         onSessionFinished?()

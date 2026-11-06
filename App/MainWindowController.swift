@@ -18,8 +18,8 @@ final class MainWindowController {
             let window = NSWindow(contentViewController: hosting)
             window.title = "LingoLens"
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-            window.setContentSize(NSSize(width: 940, height: 660))
-            window.contentMinSize = NSSize(width: 880, height: 580)
+            window.setContentSize(NSSize(width: 980, height: 660))
+            window.contentMinSize = NSSize(width: 940, height: 600)
             window.isReleasedWhenClosed = false
             window.center()
             self.window = window

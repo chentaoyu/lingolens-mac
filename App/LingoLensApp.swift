@@ -12,7 +12,7 @@ struct LingoLensApp: App {
         } label: {
             Label("LingoLens", systemImage: "character.bubble")
         }
-        .menuBarExtraStyle(.menu)
+        .menuBarExtraStyle(.window)
 
         Window("LingoLens", id: "main") {
             MainWindowView()

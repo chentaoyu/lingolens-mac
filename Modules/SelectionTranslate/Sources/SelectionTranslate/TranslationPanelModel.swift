@@ -19,6 +19,12 @@ public final class TranslationPanelModel: ObservableObject {
     @Published public private(set) var modelName: String = ""
     @Published public private(set) var footer: String = ""
     @Published public var isPinned: Bool = false
+    /// 用户在浮窗里手动选的目标语言；nil 表示按设置自动决定。
+    @Published public var targetOverride: String?
+    @Published public private(set) var sourceLanguage: String?
+    @Published public private(set) var targetLanguage: String = ""
+    @Published public var isEditingSource = false
+    @Published public private(set) var didCopy = false
 
     public var onClose: (() -> Void)?
     public var onPinChanged: ((Bool) -> Void)?
@@ -26,7 +32,7 @@ public final class TranslationPanelModel: ObservableObject {
     private let service: TranslationService
     private var task: Task<Void, Never>?
     private var metrics: ChatMetrics?
-    private var targetLanguage: String = ""
+    private var copyResetTask: Task<Void, Never>?
 
     public init(service: TranslationService) {
         self.service = service
@@ -34,6 +40,8 @@ public final class TranslationPanelModel: ObservableObject {
 
     public func prepareForManualInput() {
         task?.cancel()
+        isEditingSource = true
+        sourceLanguage = nil
         phase = .idle
         translatedText = ""
         metrics = nil
@@ -57,11 +65,14 @@ public final class TranslationPanelModel: ObservableObject {
         footer = ""
         modelName = ""
         phase = .loading
-        targetLanguage = ""
+        isEditingSource = false
+        sourceLanguage = TranslationDirection.detectLanguage(of: text)
+        let target = targetOverride ?? service.resolvedTargetLanguage(for: text)
+        targetLanguage = target
 
         task = Task { @MainActor in
             do {
-                for try await event in self.service.translate(text: text) {
+                for try await event in self.service.translate(text: text, targetLanguage: target) {
                     if Task.isCancelled { return }
                     switch event {
                     case let .modelResolved(name):
@@ -98,6 +109,21 @@ public final class TranslationPanelModel: ObservableObject {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(translatedText, forType: .string)
+        didCopy = true
+        copyResetTask?.cancel()
+        copyResetTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.2))
+            guard !Task.isCancelled else { return }
+            self.didCopy = false
+        }
+    }
+
+    /// 切换目标语言后立即重译（原文为空时只记录选择）。
+    public func setTarget(_ language: String?) {
+        targetOverride = language
+        if !originalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            retranslate()
+        }
     }
 
     public func togglePin() {

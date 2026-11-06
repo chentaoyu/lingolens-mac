@@ -43,6 +43,10 @@ final class AppEnvironment: ObservableObject {
     @Published private(set) var isInstallingRuntime = false
     @Published private(set) var meetingsRevision = 0
     @Published var lastError: String?
+    /// 主窗口当前页；菜单栏等入口可直接跳转。
+    @Published var mainTab: MainTab = .home
+    /// 跳到会议页时要选中的会议。
+    @Published var focusMeetingID: String?
 
     private var started = false
     private var statusTask: Task<Void, Never>?
@@ -510,6 +514,12 @@ final class AppEnvironment: ObservableObject {
             return
         }
         coordinator.translate(text: text)
+    }
+
+    func showMainWindow(_ tab: MainTab? = nil, meetingID: String? = nil) {
+        if let tab { mainTab = tab }
+        if let meetingID { focusMeetingID = meetingID }
+        MainWindowController.shared.show()
     }
 
     func clearError() {

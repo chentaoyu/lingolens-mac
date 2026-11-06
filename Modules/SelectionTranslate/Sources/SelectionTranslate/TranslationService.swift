@@ -36,15 +36,20 @@ public final class TranslationService {
         )
     }
 
-    public func translate(
-        text: String,
-        scene: SceneID = .selectionTranslation
-    ) -> AsyncThrowingStream<TranslationEvent, Error> {
-        let preferred = settingsStore.settings.general.targetLanguage
-        let target = TranslationDirection.resolvedTargetLanguage(
-            preferred: preferred,
+    /// 未指定目标语言时，按设置的目标语言并处理“原文即目标语言”的情况。
+    public func resolvedTargetLanguage(for text: String) -> String {
+        TranslationDirection.resolvedTargetLanguage(
+            preferred: settingsStore.settings.general.targetLanguage,
             sourceText: text
         )
+    }
+
+    public func translate(
+        text: String,
+        targetLanguage: String? = nil,
+        scene: SceneID = .selectionTranslation
+    ) -> AsyncThrowingStream<TranslationEvent, Error> {
+        let target = targetLanguage ?? resolvedTargetLanguage(for: text)
         let messages = TranslationPrompt.messages(text: text, targetLanguage: target)
         return chat.stream(scene: scene, messages: messages)
     }
