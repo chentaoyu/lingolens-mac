@@ -1,0 +1,127 @@
+# LingoLens v1（桌面基础）实现说明
+
+- 日期：2026-11-05
+- 对应设计文档：[2026-11-05-lingolens-mac-design.md](2026-11-05-lingolens-mac-design.md)
+- 范围：设计文档第 4–7 章、第 10–13 章中的“桌面基础”子项目
+
+## 1. 交付内容
+
+| 设计文档章节 | 实现位置 | 说明 |
+|---|---|---|
+| 3 模块划分 / 13 目录结构 | `Modules/*`、`App/`、`project.yml` | 每个模块独立 target；App 通过 XcodeGen 构建 |
+| 4.1 Python 环境 | `ModelRuntime/PythonEnvironment.swift` | 内置 uv、Python 3.12、固定 mlx-vlm、版本标记、进度流、重装 |
+| 4.2 ServerPool | `ModelRuntime/ServerPool.swift` | 一模型一进程、状态机、就绪轮询、崩溃重启、租约、空闲卸载、退出清理 |
+| 5 ModelLibrary | `Modules/ModelLibrary` | 扫描、导入引用、HF 下载、模型信息、删除策略 |
+| 6 设置 | `Modules/Settings`、`App/SettingsView.swift` | `settings.json`、场景参数、服务参数、目标语言、快捷键、开机启动 |
+| 7 划词翻译 | `Modules/SelectionTranslate` | Carbon 快捷键、AX 取词、剪贴板兜底、非激活浮窗、语言检测、流式译文 |
+| 7 LLMClient | `Modules/LLMClient` | `/v1/chat/completions` SSE、首字延迟/tok/s、取消 |
+| 10 权限 | `SelectionTranslate/SelectionReader.swift`、`App/PermissionsSettingsView.swift` | 辅助功能状态与申请；麦克风状态（v2 使用） |
+| 11 错误处理 | 各模块 `LocalizedError` + 界面提示 | 运行时失败、启动失败、内存不足、翻译失败等 |
+
+## 2. 构建方式
+
+- **SwiftPM（`Package.swift`）**：提供 5 个功能模块与 5 个测试 target，可用 `swift build` / `swift test` 在只有 Command Line Tools 的机器上验证。
+- **XcodeGen（`project.yml`）**：生成 `LingoLens.xcodeproj`，编译 `App/` 并链接模块，产出菜单栏应用。
+- App 源码只由 XcodeGen 工程编译，不放进 SwiftPM target，避免两套构建系统重复编译同一批 SwiftUI 源码。
+
+## 3. 关键实现决策
+
+### 3.1 ServerPool
+
+- `ServerState`：`stopped → starting → ready → stopping`，失败进入 `failed(message)`。
+- `ensure(model:config:)` 并发调用共享同一个 `Task`，避免同一模型重复启动。
+- 引用计数通过 `ServerLease`：`acquire` / `release`；租约未释放时不会被空闲卸载。
+- 空闲卸载由 `reapIdle` 完成（App 内每 30s 定时调用），只处理非常驻、无租约的模型。
+- 崩溃后自动重启 1 次；5 分钟（`restartWindow`）内再次崩溃进入 `failed`，避免崩溃循环。
+- 就绪探测轮询 `GET /v1/models`，默认超时 120s、间隔 0.5s。
+- 就绪后读取 `/v1/models` 返回的模型标识（mlx-vlm 返回的是模型绝对路径），通过
+  `ServerLease.serverModelID` 传给 Chat Completions 请求。**不能用应用内的模型名**：
+  mlx-vlm 收到未知 model 名会卸载已加载模型并尝试加载同名模型。
+- 启动前按 safetensors 总大小估算内存（权重 × 1.15 + 512MB），超过可用内存则拒绝启动。
+- 仅监听 `127.0.0.1` 的系统分配端口；PID 记录写入 `runtime/servers.json`，下次启动清理残留。
+- 日志在 `~/Library/Logs/LingoLens/<模型名>.log`。
+
+### 3.2 Python 环境
+
+- 通过内置 `Resources/uv/uv` 创建 `runtime/venv`，安装 `mlx-vlm==<固定版本>`。
+- `runtime/installed.json` 记录 python / mlx-vlm 版本；版本变化时重装依赖。
+- 安装进度通过 `AsyncStream<InstallProgress>` 暴露给 UI；失败保留日志可重试。
+- uv 查找顺序：Bundle 内置 → `LINGOLENS_UV` → Homebrew / 用户目录 → PATH。
+
+### 3.3 ModelLibrary
+
+- 扫描判定：目录含 `config.json` + 直系 `*.safetensors`，且 `config.quantization` 或目录名/父目录名含 `mlx`。
+- 支持 HF 缓存布局（`models--org--name/snapshots/<hash>`），展示名从 `models--...` 还原。
+- 模型信息：参数量（解析 safetensors 头部并累加张量元素数）、量化位数、磁盘大小、预估内存、视觉支持、上下文长度。
+- 导入按引用登记，不复制；路径失效时标记“不可用”。
+- HF 下载：`/api/models/<repo>` 列文件，逐文件 Range 续传到 `.part`，完成后原子改名；支持取消和进度。
+- 删除：下载的模型删除文件；扫描 / 导入的只移出列表。
+
+### 3.4 设置
+
+- `~/Library/Application Support/LingoLens/settings.json`，300ms 防抖落盘。
+- 所有字段解码都容忍缺失，便于版本演进。
+- 场景默认参数遵循文档 6.2；thinking 关闭时请求体带 `chat_template_kwargs.enable_thinking=false`。
+- 服务参数按模型保存，修改后点击“应用并重启”对运行中的进程生效。
+
+### 3.5 划词翻译
+
+- Carbon `RegisterEventHotKey`，默认 `⌥D`，设置页可录制修改；修改后立即重新注册。
+- 取词顺序：AX `kAXSelectedTextAttribute` → 备份剪贴板 + 模拟 ⌘C + 恢复 → 空浮窗手动输入。
+- 浮窗为 `.nonactivatingPanel`，层级 `.floating`，不激活 App；单实例、再次触发替换内容。
+- 译文流式追加；底部显示“模型 · 首字延迟 · tok/s”；支持复制、固定、⌘↩ 重译、Esc 关闭。
+- `NLLanguageRecognizer` 检测原文语言，与目标语言相同则自动改译英文。
+
+## 4. 验证结果（Xcode 27.2）
+
+- `xcodegen generate`：成功生成工程。
+- `xcodebuild ... build`：**BUILD SUCCEEDED**，ad-hoc 签名成功，App 包内含 `Resources/uv/uv`，`LSUIElement=true`。
+- `xcodebuild ... test`：**TEST SUCCEEDED**，55 个常规用例通过（2 个真实模型用例默认跳过）。
+- `swift test`（SwiftPM）：常规用例全部通过。
+- 真实模型集成（`Qwen3.5-4B-MLX-4bit` + `mlx-vlm 0.7.12`）：
+  - 直接调用 server：翻译 `hello` → `你好`，4.85s 通过。
+  - 走 `TranslationService` 全链路：3.21s 通过。
+- 启动冒烟测试：App 运行 6 秒无崩溃，按预期创建 `Application Support/LingoLens` 与日志目录。
+- 真机完整链路：启动 App → 扫描到 `~/mlx-models/Qwen3.5-4B-MLX-4bit` → 自动设为常驻模型 →
+  启动 `mlx_vlm.server` → `/v1/models` 返回 loaded=true → 通过 AppleScript 退出 → 子进程与
+  PID 记录均被清理。
+- 固定版本：Python 3.12 + `mlx-vlm==0.7.12`；已确认 `--kv-bits`、`--max-kv-size` 参数存在。
+
+## 5. 测试覆盖
+
+`swift test` 共 57 个用例，其中 55 个常规用例默认运行、2 个需真实模型的集成用例默认跳过：
+
+- **ModelRuntime**：ServerPool 启动/复用、服务端模型标识、空闲卸载、租约保护、常驻不卸载、崩溃重启一次、内存拦截、就绪超时、shutdown；Python 环境安装/复用/版本重装/缺少 uv；服务参数拼装；端口分配；PID 文件；内存估算；日志名安全化。
+- **ModelLibrary**：模型目录识别、量化/视觉/上下文解析、safetensors 参数统计、目录名 mlx 回退、扫描过滤、列表持久化与删除策略、可用性刷新、HF 仓库校验与路径编码。
+- **LLMClient**：SSE 分块/CRLF/多行/注释、请求体与 thinking、流式增量与 usage、HTTP 错误、场景默认参数。
+- **Settings**：默认值、缺省字段解码、往返一致、模型解析、磁盘读写、Store 落盘、快捷键显示/归一化。
+- **SelectionTranslate**：语言检测与目标语言回退、提示词约束、支持语言列表、错误文案。
+
+集成测试位于 `Tests/LLMClientTests/IntegrationTests.swift` 与
+`Tests/SelectionTranslateTests/TranslationServiceIntegrationTests.swift`，默认跳过；设置
+`LINGOLENS_INTEGRATION_MODEL` 指向本地模型目录后运行：
+
+```bash
+LINGOLENS_INTEGRATION_MODEL=~/mlx-models/Qwen3.5-4B-MLX-4bit swift test --filter Integration
+```
+
+两个用例都会启动真实 `mlx_vlm.server`：一个直接调用 Chat Completions，另一个走
+`TranslationService`（设置解析 → 模型选择 → 租约 → 流式翻译）完整链路。本机已用
+`Qwen3.5-4B-MLX-4bit` 实际跑通（约 3–5 秒）。
+
+## 6. 与设计文档的偏差 / 待办
+
+- 设计文档以 XcodeGen 为唯一工程；本实现额外提供 SwiftPM 包，便于无 Xcode 环境下编译与测试模块。
+- 字幕浮窗、点击穿透、麦克风/系统音频采集、会议页与纪要生成已在 v2/v3 实现，
+  见 [v2/v3 实现说明](2026-11-05-v2-v3-implementation-notes.md)。
+- 模型服务参数名（`--kv-bits`、`--max-kv-size`）依赖固定版本 mlx-vlm，升级时需核对；界面提供“应用并重启”和服务参数覆盖。
+- 未做代码签名配置与公证；首版按文档要求本地签名运行。
+
+## 7. 手动验收建议
+
+1. `swift test` 全绿。
+2. `xcodegen generate` 后构建 App，确认菜单栏图标出现、无 Dock 图标。
+3. 导入或下载一个 MLX 模型，设为常驻，确认启动后 `/v1/models` 可访问且日志有输出。
+4. 在 Safari / VS Code / 微信中选中文字，按 ⌥D，确认浮窗出现、流式译文、首字延迟与 tok/s 显示。
+5. 修改快捷键、目标语言、场景参数，确认设置落盘并生效。
+6. 关闭 App，确认无残留 `mlx_vlm.server` 进程。

@@ -1,0 +1,112 @@
+# XcodeGen 工程定义。生成方式：xcodegen generate
+#
+# 说明：
+# - 应用本体由本工程编译 App/ 下的源码，并链接 Swift Package 中的各模块。
+# - Swift Package（Package.swift）同时提供 `swift build` / `swift test` 的纯命令行构建与单元测试。
+name: LingoLens
+
+options:
+  bundleIdPrefix: com.lingolens
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+packages:
+  LingoLensModules:
+    path: .
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    ENABLE_HARDENED_RUNTIME: NO
+    DEAD_CODE_STRIPPING: YES
+
+targets:
+  LingoLens:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+        excludes:
+          - Info.plist
+      - path: Resources/uv
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lingolens.mac
+        PRODUCT_NAME: LingoLens
+        INFOPLIST_FILE: App/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+    dependencies:
+      - package: LingoLensModules
+        product: ModelRuntime
+      - package: LingoLensModules
+        product: ModelLibrary
+      - package: LingoLensModules
+        product: LLMClient
+      - package: LingoLensModules
+        product: Settings
+      - package: LingoLensModules
+        product: SelectionTranslate
+      - package: LingoLensModules
+        product: AudioCapture
+      - package: LingoLensModules
+        product: Transcriber
+      - package: LingoLensModules
+        product: LiveSubtitle
+      - package: LingoLensModules
+        product: Meetings
+      - package: LingoLensModules
+        product: SceneChat
+
+  LingoLensTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+    dependencies:
+      - package: LingoLensModules
+        product: ModelRuntime
+      - package: LingoLensModules
+        product: ModelLibrary
+      - package: LingoLensModules
+        product: LLMClient
+      - package: LingoLensModules
+        product: Settings
+      - package: LingoLensModules
+        product: SelectionTranslate
+      - package: LingoLensModules
+        product: AudioCapture
+      - package: LingoLensModules
+        product: Transcriber
+      - package: LingoLensModules
+        product: LiveSubtitle
+      - package: LingoLensModules
+        product: Meetings
+      - package: LingoLensModules
+        product: SceneChat
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lingolens.mac.tests
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  LingoLens:
+    build:
+      targets:
+        LingoLens: all
+        LingoLensTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - LingoLensTests

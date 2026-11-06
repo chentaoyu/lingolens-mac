@@ -1,0 +1,11 @@
+.build/
+.build-*/
+LingoLens.xcodeproj/
+*.xcworkspace/
+.xcodebuild/
+.swiftpm/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+Resources/uv/uv

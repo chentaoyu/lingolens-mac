@@ -1,0 +1,553 @@
+import AppKit
+import AudioCapture
+import Meetings
+import SelectionTranslate
+import SwiftUI
+
+struct MeetingsView: View {
+    @EnvironmentObject private var environment: AppEnvironment
+
+    @State private var meetings: [MeetingSummary] = []
+    @State private var selectedID: String?
+    @State private var detail: MeetingDetail?
+    @State private var titleDraft = ""
+
+    @State private var templates: [MinutesTemplate] = []
+    @State private var selectedTemplateID: UUID?
+    @State private var minutesText = ""
+    @State private var phaseText = ""
+    @State private var isGenerating = false
+    @State private var generationTask: Task<Void, Never>?
+    @State private var searchText = ""
+    @State private var minutesLanguage = "zh-Hans"
+    @State private var showTemplateManager = false
+
+    var body: some View {
+        HSplitView {
+            sidebar
+                .frame(minWidth: 220, idealWidth: 260, maxWidth: 320)
+            detailPane
+                .frame(minWidth: 540, maxWidth: .infinity)
+        }
+        .task { await reload() }
+        .onChange(of: selectedID) { _, newValue in
+            generationTask?.cancel()
+            isGenerating = false
+            guard let newValue, newValue != detail?.meta.id else { return }
+            Task { await loadDetail(id: newValue) }
+        }
+        .onDisappear {
+            generationTask?.cancel()
+        }
+        .onChange(of: environment.meetingsRevision) { _, _ in
+            Task { await reload() }
+        }
+        .onChange(of: showTemplateManager) { _, showing in
+            if !showing {
+                Task { await reload() }
+            }
+        }
+        .sheet(isPresented: $showTemplateManager) {
+            MinutesTemplateSheet()
+                .environmentObject(environment)
+        }
+    }
+
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("会议")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Button {
+                    Task { await reload() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .help("刷新")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            if meetings.isEmpty {
+                ContentUnavailableView(
+                    "还没有会议记录",
+                    systemImage: "waveform",
+                    description: Text("在菜单栏开始音频会话并打开“记录会议”，结束后会出现在这里。")
+                )
+            } else {
+                List(selection: $selectedID) {
+                    ForEach(meetings) { summary in
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text(summary.meta.title)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .lineLimit(1)
+                                if summary.hasMinutes {
+                                    TagBadge(text: "纪要", color: .accentColor)
+                                }
+                            }
+                            Text("\(dateString(summary.meta.startedAt)) · \(durationString(summary.meta.duration))")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .tag(summary.meta.id)
+                        .contextMenu {
+                            Button("删除", role: .destructive) {
+                                Task {
+                                    await environment.deleteMeeting(id: summary.meta.id)
+                                    if selectedID == summary.meta.id { selectedID = nil }
+                                    await reload()
+                                }
+                            }
+                        }
+                    }
+                }
+                .listStyle(.sidebar)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var detailPane: some View {
+        if let detail {
+            VStack(alignment: .leading, spacing: 12) {
+                meetingHeader(detail)
+                Divider()
+                transcriptSection(detail)
+                Divider()
+                minutesSection(detail)
+            }
+            .padding(16)
+        } else {
+            ContentUnavailableView(
+                "选择一场会议",
+                systemImage: "list.bullet.rectangle",
+                description: Text("左侧选择会议查看转写与纪要。")
+            )
+        }
+    }
+
+    private func meetingHeader(_ detail: MeetingDetail) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TextField("会议标题", text: $titleDraft)
+                .textFieldStyle(.plain)
+                .font(.system(size: 18, weight: .semibold))
+                .onSubmit {
+                    Task {
+                        await environment.renameMeeting(id: detail.meta.id, title: titleDraft)
+                        await reload()
+                    }
+                }
+
+            HStack(spacing: 12) {
+                Label(dateString(detail.meta.startedAt), systemImage: "calendar")
+                Label(durationString(detail.meta.duration), systemImage: "clock")
+                Label("\(detail.entries.count) 句", systemImage: "text.bubble")
+                if let ended = detail.meta.endedAt {
+                    Label("结束于 \(timeString(ended))", systemImage: "flag.checkered")
+                }
+                Spacer()
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private func transcriptSection(_ detail: MeetingDetail) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("转写")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("回车保存单条修改")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                TextField("搜索转写", text: $searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 200)
+            }
+
+            let visibleEntries = filteredEntries(detail)
+
+            if visibleEntries.isEmpty {
+                Text(detail.entries.isEmpty ? "这场会议没有转写内容。" : "没有匹配的转写。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(visibleEntries) { entry in
+                            TranscriptRow(entry: entry) { text in
+                                Task {
+                                    await environment.updateTranscript(
+                                        meetingID: detail.meta.id,
+                                        entryID: entry.id,
+                                        text: text
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                .frame(minHeight: 120, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private func minutesSection(_ detail: MeetingDetail) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Text("会议纪要")
+                    .font(.system(size: 13, weight: .semibold))
+
+                Picker("模板", selection: $selectedTemplateID) {
+                    ForEach(templates) { template in
+                        Text(template.name).tag(Optional(template.id))
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 150)
+
+                Picker("输出语言", selection: $minutesLanguage) {
+                    ForEach(TranslationPrompt.supportedTargetLanguages, id: \.id) { language in
+                        Text(language.name).tag(language.id)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 110)
+
+                Button(isGenerating ? "停止" : "生成纪要") {
+                    if isGenerating {
+                        generationTask?.cancel()
+                        isGenerating = false
+                        phaseText = "已停止"
+                    } else {
+                        generate(for: detail)
+                    }
+                }
+                .controlSize(.small)
+                .disabled(templates.isEmpty || detail.entries.isEmpty)
+
+                Button("保存") {
+                    Task {
+                        await environment.saveMinutes(minutesText, meetingID: detail.meta.id)
+                        phaseText = "已保存"
+                        await reload()
+                    }
+                }
+                .controlSize(.small)
+                .disabled(minutesText.isEmpty)
+
+                Button("复制") {
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    pasteboard.setString(minutesText, forType: .string)
+                    phaseText = "已复制 Markdown"
+                }
+                .controlSize(.small)
+                .disabled(minutesText.isEmpty)
+
+                Button("模板…") {
+                    showTemplateManager = true
+                }
+                .controlSize(.small)
+
+                Spacer()
+
+                if !phaseText.isEmpty {
+                    Text(phaseText)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            TextEditor(text: $minutesText)
+                .font(.system(size: 12, design: .monospaced))
+                .frame(minHeight: 180)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(Color.secondary.opacity(0.2))
+                )
+        }
+    }
+
+    private func generate(for detail: MeetingDetail) {
+        guard let id = selectedTemplateID,
+              let template = templates.first(where: { $0.id == id })
+        else { return }
+
+        isGenerating = true
+        minutesText = ""
+        phaseText = "准备生成…"
+
+        generationTask = Task { @MainActor in
+            do {
+                let languageName = TranslationPrompt.languageName(minutesLanguage)
+                for try await event in environment.minutesGenerator.generate(
+                    meeting: detail,
+                    template: template,
+                    targetLanguage: languageName
+                ) {
+                    switch event {
+                    case let .phase(text):
+                        phaseText = text
+                    case let .delta(text):
+                        minutesText += text
+                    case .finished:
+                        break
+                    }
+                }
+                await environment.saveMinutes(minutesText, meetingID: detail.meta.id)
+                phaseText = "已生成并保存"
+                isGenerating = false
+                await reload()
+            } catch is CancellationError {
+                isGenerating = false
+                phaseText = "已停止"
+            } catch {
+                isGenerating = false
+                phaseText = "生成失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func reload() async {
+        meetings = await environment.loadMeetings()
+        templates = await environment.templates()
+        if selectedTemplateID == nil {
+            selectedTemplateID = templates.first(where: { $0.id == MinutesTemplate.standardID })?.id
+                ?? templates.first?.id
+        }
+        if selectedID == nil {
+            selectedID = meetings.first?.id
+        }
+        if let selectedID {
+            await loadDetail(id: selectedID)
+        } else {
+            detail = nil
+        }
+    }
+
+    private func loadDetail(id: String) async {
+        detail = await environment.loadMeeting(id: id)
+        titleDraft = detail?.meta.title ?? ""
+        minutesText = detail?.minutes ?? ""
+        phaseText = ""
+    }
+
+    private func filteredEntries(_ detail: MeetingDetail) -> [TranscriptEntry] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return detail.entries }
+        return detail.entries.filter {
+            $0.text.localizedCaseInsensitiveContains(query)
+                || ($0.translation?.localizedCaseInsensitiveContains(query) ?? false)
+        }
+    }
+
+    private func dateString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        formatter.locale = Locale(identifier: "zh_CN")
+        return formatter.string(from: date)
+    }
+
+    private func timeString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+
+    private func durationString(_ duration: TimeInterval) -> String {
+        let seconds = max(0, Int(duration))
+        let hours = seconds / 3600
+        let minutes = (seconds % 3600) / 60
+        if hours > 0 {
+            return "\(hours) 小时 \(minutes) 分"
+        }
+        return "\(minutes) 分"
+    }
+}
+
+private struct TranscriptRow: View {
+    let entry: TranscriptEntry
+    let onSave: (String) -> Void
+
+    @State private var text: String
+
+    init(entry: TranscriptEntry, onSave: @escaping (String) -> Void) {
+        self.entry = entry
+        self.onSave = onSave
+        _text = State(initialValue: entry.text)
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(timeString)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 58, alignment: .leading)
+
+            Text(entry.speaker.displayName)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(
+                    Capsule().fill(entry.speaker == .me ? Color.blue.opacity(0.75) : Color.green.opacity(0.75))
+                )
+
+            VStack(alignment: .leading, spacing: 2) {
+                TextField("", text: $text, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .onSubmit { onSave(text) }
+
+                if let translation = entry.translation, !translation.isEmpty {
+                    Text(translation)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var timeString: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: entry.time)
+    }
+}
+private struct MinutesTemplateSheet: View {
+    @EnvironmentObject private var environment: AppEnvironment
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var templates: [MinutesTemplate] = []
+    @State private var selectedID: UUID?
+    @State private var name = ""
+    @State private var prompt = ""
+    @State private var isNew = false
+    @State private var message = ""
+
+    var body: some View {
+        HSplitView {
+            VStack(spacing: 0) {
+                List(selection: $selectedID) {
+                    ForEach(templates) { template in
+                        Text(template.name)
+                            .tag(Optional(template.id))
+                    }
+                }
+                .listStyle(.sidebar)
+
+                HStack(spacing: 8) {
+                    Button("新建") {
+                        isNew = true
+                        selectedID = nil
+                        name = "新模板"
+                        prompt = ""
+                    }
+                    Button("删除") {
+                        deleteSelected()
+                    }
+                    .disabled(selectedID == nil || selectedID == MinutesTemplate.standardID)
+                    Spacer()
+                }
+                .padding(8)
+            }
+            .frame(width: 200)
+
+            VStack(alignment: .leading, spacing: 10) {
+                TextField("模板名称", text: $name)
+                    .textFieldStyle(.roundedBorder)
+
+                Text("提示词（生成纪要时作为系统提示）")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                TextEditor(text: $prompt)
+                    .font(.system(size: 12, design: .monospaced))
+                    .frame(minHeight: 240)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(Color.secondary.opacity(0.2))
+                    )
+
+                HStack {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("取消") { dismiss() }
+                    Button("保存") { save() }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty
+                            || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(12)
+        }
+        .frame(width: 720, height: 470)
+        .task { await load() }
+        .onChange(of: selectedID) { _, _ in loadSelection() }
+    }
+
+    private func load() async {
+        templates = await environment.templates()
+        isNew = false
+        selectedID = templates.first(where: { $0.id == MinutesTemplate.standardID })?.id
+            ?? templates.first?.id
+        loadSelection()
+    }
+
+    private func loadSelection() {
+        guard !isNew,
+              let id = selectedID,
+              let template = templates.first(where: { $0.id == id })
+        else { return }
+        name = template.name
+        prompt = template.prompt
+        message = ""
+    }
+
+    private func save() {
+        Task {
+            let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedName.isEmpty, !trimmedPrompt.isEmpty else { return }
+
+            if isNew {
+                let template = await environment.addTemplate(name: trimmedName, prompt: trimmedPrompt)
+                templates = await environment.templates()
+                selectedID = template.id
+                isNew = false
+            } else if let id = selectedID,
+                      var template = templates.first(where: { $0.id == id }) {
+                template.name = trimmedName
+                template.prompt = trimmedPrompt
+                await environment.templateStore.update(template)
+                templates = await environment.templates()
+            }
+            message = "已保存"
+        }
+    }
+
+    private func deleteSelected() {
+        guard let id = selectedID, id != MinutesTemplate.standardID else { return }
+        Task {
+            await environment.templateStore.delete(id: id)
+            templates = await environment.templates()
+            selectedID = templates.first?.id
+            isNew = false
+            loadSelection()
+        }
+    }
+}

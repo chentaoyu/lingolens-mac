@@ -1,0 +1,518 @@
+import AppKit
+import Combine
+import Foundation
+import LiveSubtitle
+import LLMClient
+import Meetings
+import ModelLibrary
+import ModelRuntime
+import SceneChat
+import SelectionTranslate
+import Settings
+
+/// 应用级依赖容器：模型目录、运行时、服务进程、设置与划词翻译。
+@MainActor
+final class AppEnvironment: ObservableObject {
+    static let shared = AppEnvironment()
+
+    let paths: RuntimePaths
+    let settingsStore: SettingsStore
+    let pythonEnvironment: PythonEnvironment
+    let serverPool: ServerPool
+    let catalog: ModelCatalog
+    let scanner: ModelScanner
+    let downloader: HFDownloader
+    let llmClient: LocalLLMClient
+    let sceneChat: SceneChatService
+    let translationService: TranslationService
+    let coordinator: SelectionTranslationCoordinator
+    let subtitleStore: SubtitleStore
+    let subtitlePanel: SubtitlePanelController
+    let subtitleTranslation: SubtitleTranslationController
+    let meetingStore: MeetingStore
+    let templateStore: MinutesTemplateStore
+    let minutesGenerator: MinutesGenerator
+    let audioSession: AudioSessionController
+
+    @Published private(set) var settings: AppSettings
+    @Published private(set) var models: [ModelRecord] = []
+    @Published private(set) var servers: [ServerSnapshot] = []
+    @Published private(set) var runtimeProgress = InstallProgress(phase: .idle, message: "尚未准备运行时")
+    @Published private(set) var runtimeInstalled = false
+    @Published private(set) var isRefreshing = false
+    @Published private(set) var isInstallingRuntime = false
+    @Published private(set) var meetingsRevision = 0
+    @Published var lastError: String?
+
+    private var started = false
+    private var statusTask: Task<Void, Never>?
+    private var cancellables = Set<AnyCancellable>()
+
+    private init() {
+        let paths = RuntimePaths.standard()
+        try? paths.prepare()
+        self.paths = paths
+
+        let settingsStore = SettingsStore(fileURL: paths.settingsFile)
+        self.settingsStore = settingsStore
+        self.settings = settingsStore.settings
+
+        let python = PythonEnvironment(paths: paths, spec: RuntimeSpec.fromBundle())
+        self.pythonEnvironment = python
+        self.serverPool = ServerPool(paths: paths, python: python)
+        self.catalog = ModelCatalog(fileURL: paths.libraryFile)
+        self.scanner = ModelScanner()
+        self.downloader = HFDownloader(modelsDirectory: paths.modelsDirectory)
+        self.llmClient = LocalLLMClient()
+        self.sceneChat = SceneChatService(
+            client: llmClient,
+            pool: serverPool,
+            settingsStore: settingsStore,
+            catalog: catalog
+        )
+        self.translationService = TranslationService(
+            chat: sceneChat,
+            settingsStore: settingsStore
+        )
+        self.coordinator = SelectionTranslationCoordinator(
+            service: translationService,
+            settingsStore: settingsStore
+        )
+
+        let subtitleStore = SubtitleStore()
+        self.subtitleStore = subtitleStore
+        self.subtitlePanel = SubtitlePanelController(
+            store: subtitleStore,
+            settingsStore: settingsStore
+        )
+        self.subtitleTranslation = SubtitleTranslationController(
+            chat: sceneChat,
+            settingsStore: settingsStore,
+            store: subtitleStore
+        )
+        self.meetingStore = MeetingStore(root: paths.meetingsDirectory)
+        self.templateStore = MinutesTemplateStore(
+            fileURL: paths.appSupportDirectory.appendingPathComponent("minutes-templates.json")
+        )
+        self.minutesGenerator = MinutesGenerator(
+            chat: sceneChat,
+            settingsStore: settingsStore
+        )
+        self.audioSession = AudioSessionController(
+            settingsStore: settingsStore,
+            subtitleStore: subtitleStore,
+            translation: subtitleTranslation,
+            meetingStore: meetingStore
+        )
+
+        settingsStore.$settings
+            .sink { [weak self] newSettings in
+                self?.settings = newSettings
+            }
+            .store(in: &cancellables)
+
+        audioSession.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+
+        subtitlePanel.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+
+        audioSession.onSessionFinished = { [weak self] in
+            self?.meetingsRevision += 1
+        }
+
+        observeRuntimeProgress()
+    }
+
+    // MARK: - 生命周期
+
+    func start() {
+        guard !started else { return }
+        started = true
+        coordinator.start()
+
+        // 以系统实际状态校准“开机启动”开关（用户可能在系统设置里改动过）。
+        let loginItemEnabled = LaunchAtLogin.isEnabled
+        if settings.general.launchAtLogin != loginItemEnabled {
+            updateGeneral { $0.launchAtLogin = loginItemEnabled }
+        }
+
+        Task { @MainActor in
+            await refreshModels()
+            await installRuntimeIfNeeded()
+            await restoreResidentModel()
+            await serverPool.startIdleTimer()
+        }
+        startStatusLoop()
+    }
+
+    func shutdown() async {
+        statusTask?.cancel()
+        statusTask = nil
+        await audioSession.stop()
+        settingsStore.saveNow()
+        await serverPool.shutdown()
+    }
+
+    // MARK: - 音频会话 / 字幕
+
+    func startAudioSession() async {
+        subtitlePanel.show()
+        await audioSession.start()
+        if case .failed = audioSession.state {
+            subtitlePanel.hide()
+        }
+    }
+
+    func stopAudioSession() async {
+        await audioSession.stop()
+    }
+
+    // MARK: - 会议
+
+    func loadMeetings() async -> [MeetingSummary] {
+        (try? await meetingStore.list()) ?? []
+    }
+
+    func loadMeeting(id: String) async -> MeetingDetail? {
+        try? await meetingStore.load(id: id)
+    }
+
+    func updateTranscript(meetingID: String, entryID: UUID, text: String) async {
+        try? await meetingStore.updateEntry(meetingID: meetingID, entryID: entryID, text: text)
+    }
+
+    func saveMinutes(_ text: String, meetingID: String) async {
+        try? await meetingStore.saveMinutes(text, for: meetingID)
+    }
+
+    func renameMeeting(id: String, title: String) async {
+        try? await meetingStore.updateTitle(id: id, title: title)
+    }
+
+    func deleteMeeting(id: String) async {
+        try? await meetingStore.delete(id: id)
+    }
+
+    func templates() async -> [MinutesTemplate] {
+        await templateStore.all()
+    }
+
+    func addTemplate(name: String, prompt: String) async -> MinutesTemplate {
+        await templateStore.add(name: name, prompt: prompt)
+    }
+
+    // MARK: - 运行时
+
+    private func observeRuntimeProgress() {
+        Task { @MainActor in
+            for await progress in await pythonEnvironment.progressStream() {
+                self.runtimeProgress = progress
+                if progress.phase == .ready {
+                    self.runtimeInstalled = true
+                }
+            }
+        }
+    }
+
+    func installRuntimeIfNeeded() async {
+        guard !runtimeInstalled else { return }
+        await installRuntime(force: false)
+    }
+
+    func installRuntime(force: Bool = false) async {
+        guard !isInstallingRuntime else { return }
+        isInstallingRuntime = true
+        defer { isInstallingRuntime = false }
+        do {
+            if force {
+                try await pythonEnvironment.reset()
+                runtimeInstalled = false
+            }
+            _ = try await pythonEnvironment.ensureInstalled()
+            runtimeInstalled = true
+            runtimeProgress = InstallProgress(phase: .ready, message: "运行时已就绪", fraction: 1)
+        } catch {
+            runtimeInstalled = false
+            runtimeProgress = InstallProgress(phase: .failed, message: error.localizedDescription)
+            lastError = error.localizedDescription
+        }
+    }
+
+    // MARK: - 模型
+
+    func refreshModels() async {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+
+        let roots = settings.scanRoots.map { URL(fileURLWithPath: $0) }
+        let scanner = self.scanner
+        let candidates = await Task.detached(priority: .userInitiated) {
+            scanner.scan(roots: roots)
+        }.value
+        _ = await catalog.syncScanned(candidates: candidates)
+        models = await catalog.refreshAvailability()
+        applyDefaultResidentModelIfNeeded()
+        await refreshServers()
+    }
+
+    func addScanRoot(_ url: URL) {
+        let path = url.standardizedFileURL.path
+        settingsStore.update { settings in
+            guard !settings.scanRoots.contains(path) else { return }
+            settings.scanRoots.append(path)
+        }
+        Task { await refreshModels() }
+    }
+
+    func removeScanRoot(_ path: String) {
+        settingsStore.update { settings in
+            settings.scanRoots.removeAll { $0 == path }
+        }
+        Task { await refreshModels() }
+    }
+
+    func importModel(at url: URL) async {
+        do {
+            _ = try await catalog.importModel(at: url)
+            models = await catalog.all()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    func downloadModel(
+        repoID: String,
+        progress: @escaping @Sendable (DownloadProgress) -> Void
+    ) async throws -> ModelRecord {
+        let directory = try await downloader.download(repoID: repoID, progress: progress)
+        let record = await catalog.registerDownloaded(at: directory, name: repoID)
+        models = await catalog.all()
+        return record
+    }
+
+    func removeModel(_ record: ModelRecord) async {
+        await serverPool.stop(modelID: record.id, reason: "removed")
+        do {
+            try await catalog.remove(id: record.id)
+        } catch {
+            lastError = error.localizedDescription
+        }
+        if settings.residentModelID == record.id {
+            setResidentModelID(nil)
+        }
+        models = await catalog.all()
+        await refreshServers()
+    }
+
+    func setResidentModelID(_ id: String?) {
+        let previous = settings.residentModelID
+        settingsStore.update { $0.residentModelID = id }
+        Task { @MainActor in
+            if let previous, previous != id {
+                await serverPool.stop(modelID: previous, reason: "resident-changed")
+            }
+            if let id, let record = models.first(where: { $0.id == id }) {
+                await startServer(for: record)
+            }
+            await refreshServers()
+        }
+    }
+
+    func ensureResidentModel() async {
+        guard let record = residentModel else { return }
+        await startServer(for: record)
+    }
+
+    var residentModel: ModelRecord? {
+        guard let id = settings.residentModelID else { return nil }
+        return models.first { $0.id == id }
+    }
+
+    private func applyDefaultResidentModelIfNeeded() {
+        guard settings.residentModelID == nil else { return }
+        let candidates = models.filter(\.isAvailable)
+        guard !candidates.isEmpty else { return }
+        if let preferred = candidates.first(where: { $0.name.lowercased().contains("qwen3.5-4b") }) {
+            settingsStore.update { $0.residentModelID = preferred.id }
+        }
+    }
+
+    private func restoreResidentModel() async {
+        guard let record = residentModel, record.isAvailable else { return }
+        await startServer(for: record)
+    }
+
+    // MARK: - 服务进程
+
+    func runtimeRef(for record: ModelRecord) -> ModelRef {
+        ModelRef(id: record.id, name: record.name, directory: record.directoryURL)
+    }
+
+    func launchConfig(for record: ModelRecord) -> ServerLaunchConfig {
+        let service = settings.service(for: record.id)
+        return ServerLaunchConfig(
+            isResident: record.id == settings.residentModelID,
+            idleUnloadMinutes: service.idleUnloadMinutes,
+            options: ServerOptions(
+                kvCacheBits: service.kvCacheBits,
+                maxKVCacheLength: service.maxKVCacheLength
+            )
+        )
+    }
+
+    func startServer(for record: ModelRecord) async {
+        guard record.isAvailable else { return }
+        do {
+            _ = try await serverPool.ensure(model: runtimeRef(for: record), config: launchConfig(for: record))
+        } catch {
+            lastError = error.localizedDescription
+        }
+        await refreshServers()
+    }
+
+    func stopServer(for record: ModelRecord) async {
+        await serverPool.stop(modelID: record.id, reason: "manual")
+        await refreshServers()
+    }
+
+    func restartServer(for record: ModelRecord) async {
+        do {
+            _ = try await serverPool.restart(modelID: record.id)
+        } catch {
+            lastError = error.localizedDescription
+        }
+        await refreshServers()
+    }
+
+    func state(for record: ModelRecord) -> ServerState {
+        servers.first { $0.model.id == record.id }?.state ?? .stopped
+    }
+
+    func snapshot(for record: ModelRecord) -> ServerSnapshot? {
+        servers.first { $0.model.id == record.id }
+    }
+
+    private func startStatusLoop() {
+        statusTask?.cancel()
+        statusTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                await self?.refreshServers()
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+    }
+
+    func refreshServers() async {
+        servers = await serverPool.snapshot()
+    }
+
+    // MARK: - 设置
+
+    func updateScene(_ scene: SceneID, _ mutate: (inout SceneSettings) -> Void) {
+        settingsStore.update { settings in
+            var sceneSettings = settings.scene(scene)
+            mutate(&sceneSettings)
+            settings.setScene(sceneSettings, for: scene)
+        }
+    }
+
+    func updateGeneral(_ mutate: (inout GeneralSettings) -> Void) {
+        settingsStore.update { settings in
+            mutate(&settings.general)
+        }
+    }
+
+    func updateAudioSession(_ mutate: (inout AudioSessionSettings) -> Void) {
+        settingsStore.update { settings in
+            mutate(&settings.audioSession)
+        }
+    }
+
+    func updateSubtitle(_ mutate: (inout SubtitleSettings) -> Void) {
+        settingsStore.update { settings in
+            mutate(&settings.subtitle)
+        }
+    }
+
+    func updateService(_ modelID: String, _ mutate: (inout ServiceSettings) -> Void) {
+        settingsStore.update { settings in
+            var service = settings.service(for: modelID)
+            mutate(&service)
+            settings.setService(service, for: modelID)
+        }
+    }
+
+    func applyServiceAndRestart(_ record: ModelRecord) async {
+        settingsStore.saveNow()
+        let state = await serverPool.state(for: record.id)
+        guard state.isRunning else { return }
+        await restartServer(for: record)
+    }
+
+    // MARK: - 辅助
+
+    var hotkeyDisplay: String {
+        settings.general.hotkey.displayString
+    }
+
+    var statusSummary: String {
+        if !runtimeInstalled {
+            return "运行时准备中：\(runtimeProgress.message)"
+        }
+        if let resident = residentModel {
+            let state = state(for: resident)
+            switch state {
+            case .ready: return "常驻模型 \(resident.name) 已就绪"
+            case .starting: return "常驻模型 \(resident.name) 加载中…"
+            case .failed: return "常驻模型加载失败"
+            default: return "常驻模型未运行"
+            }
+        }
+        return models.isEmpty ? "尚未添加模型" : "尚未设置常驻模型"
+    }
+
+    func openLogsFolder() {
+        try? FileManager.default.createDirectory(at: paths.logsDirectory, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(paths.logsDirectory)
+    }
+
+    func openAppSupportFolder() {
+        try? paths.prepare()
+        NSWorkspace.shared.open(paths.appSupportDirectory)
+    }
+
+    func openLog(for record: ModelRecord) {
+        let url = paths.logURL(forModel: record.name)
+        if FileManager.default.fileExists(atPath: url.path) {
+            NSWorkspace.shared.open(url)
+        } else {
+            openLogsFolder()
+        }
+    }
+
+    func revealInFinder(_ record: ModelRecord) {
+        NSWorkspace.shared.activateFileViewerSelecting([record.directoryURL])
+    }
+
+    func translateClipboard() {
+        guard let text = NSPasteboard.general.string(forType: .string),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            lastError = "剪贴板里没有可翻译的文本。"
+            return
+        }
+        coordinator.translate(text: text)
+    }
+
+    func clearError() {
+        lastError = nil
+    }
+}
