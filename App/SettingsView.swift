@@ -178,6 +178,7 @@ struct AppSettingsView: View {
                         }
                         .buttonStyle(.borderless)
                         .help("移除该扫描目录")
+                        .accessibilityLabel("移除扫描目录 \(abbreviatedPath(path))")
                     }
                 }
                 HStack {

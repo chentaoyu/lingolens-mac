@@ -257,6 +257,7 @@ struct SessionButton: View {
         }
         .buttonStyle(.borderedProminent)
         .tint(session.state == .running ? .red : .accentColor)
+        .accessibilityLabel(session.state == .running || session.state == .starting ? "停止音频会话" : "开始音频会话")
     }
 }
 
@@ -321,22 +322,52 @@ private struct StatusCard<Content: View, Footer: View>: View {
     }
 }
 
-/// 模型预估内存与本机内存的对比条。
-private struct MemoryMeter: View {
+/// 模型预估内存与本机内存的对比条，首页与模型页共用。
+struct MemoryMeter: View {
     let bytes: Int64
+    var showsLabel = true
 
     var body: some View {
-        let total = Double(ProcessInfo.processInfo.physicalMemory)
-        let ratio = min(1, Double(bytes) / total)
+        let ratio = MemoryFit.ratio(bytes)
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("预估内存").foregroundStyle(.secondary)
-                Spacer()
-                Text("\(formatBytes(UInt64(max(0, bytes)))) / \(formatBytes(UInt64(total)))")
+            if showsLabel {
+                HStack {
+                    Text("预估内存").foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(formatBytes(UInt64(max(0, bytes)))) / \(formatBytes(ProcessInfo.processInfo.physicalMemory))")
+                }
+                .font(.caption)
             }
-            .font(.caption)
-            ProgressView(value: ratio)
-                .tint(ratio > 0.7 ? .orange : .accentColor)
+            ProgressView(value: min(1, ratio))
+                .tint(MemoryFit.level(bytes).tint)
+        }
+    }
+}
+
+/// 模型预估内存相对本机内存的占比与分级。
+enum MemoryFit {
+    case comfortable
+    case tight
+    case insufficient
+
+    static func ratio(_ bytes: Int64) -> Double {
+        Double(max(0, bytes)) / Double(ProcessInfo.processInfo.physicalMemory)
+    }
+
+    /// 超过本机内存 75% 视为放不下（系统和其他应用也要用内存），50%~75% 为偏紧。
+    static func level(_ bytes: Int64) -> MemoryFit {
+        switch ratio(bytes) {
+        case ..<0.5: return .comfortable
+        case ..<0.75: return .tight
+        default: return .insufficient
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .comfortable: return .accentColor
+        case .tight: return .orange
+        case .insufficient: return .red
         }
     }
 }
@@ -365,6 +396,8 @@ private struct QuickActionTile: View {
             .contentShape(RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityHint(subtitle)
     }
 }
 
@@ -394,6 +427,7 @@ private struct RecentMeetingRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("\(meeting.meta.title)，\(subtitle)，\(meeting.hasMinutes ? "已有纪要" : "仅转写")")
     }
 
     private var subtitle: String {

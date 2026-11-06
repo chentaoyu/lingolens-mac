@@ -60,8 +60,9 @@ struct ModelsView: View {
             Button {
                 showDownload = true
             } label: {
-                Label("下载", systemImage: "arrow.down.circle")
+                Label("从 Hugging Face 下载", systemImage: "arrow.down.circle")
             }
+            .buttonStyle(.borderedProminent)
         }
     }
 
@@ -257,58 +258,80 @@ private struct ModelRow: View {
     @EnvironmentObject private var environment: AppEnvironment
     let record: ModelRecord
 
-    var body: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(environment.settings.residentModelID == record.id ? Color.accentColor : Color.secondary.opacity(0.25))
-                .frame(width: 8, height: 8)
+    private var isResident: Bool { environment.settings.residentModelID == record.id }
+    private var memoryFit: MemoryFit { MemoryFit.level(record.info?.estimatedMemoryBytes ?? 0) }
+    private var canLoad: Bool { record.isAvailable && memoryFit != .insufficient }
 
-            VStack(alignment: .leading, spacing: 3) {
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: record.info?.supportsVision == true ? "eye.square" : "cpu")
+                .font(.title3)
+                .foregroundStyle(isResident ? Color.accentColor : .secondary)
+                .frame(width: 32, height: 32)
+                .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+
+            VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(record.name)
                         .font(.system(size: 13, weight: .medium))
                         .lineLimit(1)
+                    if isResident {
+                        TagBadge(text: "常驻", color: .accentColor)
+                    }
                     if !record.isAvailable {
                         TagBadge(text: "不可用", color: .orange)
-                    }
-                    if environment.settings.residentModelID == record.id {
-                        TagBadge(text: "常驻", color: .accentColor)
+                    } else if memoryFit == .insufficient {
+                        TagBadge(text: "内存不足", color: .red)
                     }
                     TagBadge(text: record.sourceLabel, color: .secondary)
                 }
-
-                HStack(spacing: 10) {
-                    Text(record.path)
+                if let info = record.info {
+                    Text(info.summary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .truncationMode(.middle)
-                    if let info = record.info {
-                        Text(info.summary)
-                    }
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            }
+            .help(record.path)
+
+            Spacer(minLength: 12)
+
+            if let bytes = record.info?.estimatedMemoryBytes, bytes > 0 {
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text("\(formatBytes(UInt64(bytes))) / \(formatBytes(ProcessInfo.processInfo.physicalMemory))")
+                        .font(.caption2)
+                        .foregroundStyle(memoryFit == .insufficient ? .red : .secondary)
+                    MemoryMeter(bytes: bytes, showsLabel: false)
+                }
+                .frame(width: 130)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("预估内存 \(formatBytes(UInt64(bytes)))，本机 \(formatBytes(ProcessInfo.processInfo.physicalMemory))")
             }
 
-            Spacer()
-
             ServerStateBadge(state: environment.state(for: record))
+                .frame(width: 56, alignment: .leading)
 
-            Menu {
-                Button("设为常驻模型") {
+            if !isResident {
+                Button("设为常驻") {
                     environment.setResidentModelID(record.id)
                 }
-                Divider()
+                .controlSize(.small)
+                .disabled(!canLoad)
+                .help(canLoad ? "应用启动时自动加载此模型" : "预估内存超过本机内存的 75%，加载可能失败")
+            }
+
+            Menu {
                 Button("启动服务") {
                     Task { await environment.startServer(for: record) }
                 }
-                .disabled(!record.isAvailable)
+                .disabled(!canLoad)
                 Button("停止服务") {
                     Task { await environment.stopServer(for: record) }
                 }
                 Button("重启服务") {
                     Task { await environment.restartServer(for: record) }
                 }
-                .disabled(!record.isAvailable)
+                .disabled(!canLoad)
                 Divider()
                 Button("在 Finder 中显示") {
                     environment.revealInFinder(record)
@@ -317,7 +340,7 @@ private struct ModelRow: View {
                     environment.openLog(for: record)
                 }
                 Divider()
-                Button("移出列表", role: .destructive) {
+                Button(record.source == .downloaded ? "删除模型" : "移出列表", role: .destructive) {
                     Task { await environment.removeModel(record) }
                 }
             } label: {
@@ -325,6 +348,7 @@ private struct ModelRow: View {
             }
             .menuStyle(.borderlessButton)
             .frame(width: 26)
+            .accessibilityLabel("更多操作")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -344,6 +368,8 @@ struct ServerStateBadge: View {
                 .foregroundStyle(.secondary)
         }
         .help(helpText)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("服务状态：\(label)")
     }
 
     private var label: String {

@@ -14,6 +14,10 @@ final class DownloadSheetModel: ObservableObject {
     @Published var repoID: String = ""
     @Published private(set) var state: State = .idle
     @Published private(set) var progress: DownloadProgress?
+    /// 当前文件的下载速度（字节/秒），按最近的采样平滑。
+    @Published private(set) var bytesPerSecond: Double?
+
+    private var lastSample: (file: Int, bytes: Int64, time: Date)?
 
     private var task: Task<Void, Never>?
 
@@ -22,13 +26,15 @@ final class DownloadSheetModel: ObservableObject {
         guard !repo.isEmpty else { return }
         state = .downloading
         progress = nil
+        bytesPerSecond = nil
+        lastSample = nil
 
         task = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 let record = try await environment.downloadModel(repoID: repo) { progress in
                     Task { @MainActor in
-                        self.progress = progress
+                        self.record(progress)
                     }
                 }
                 state = .finished(record.name)
@@ -38,6 +44,30 @@ final class DownloadSheetModel: ObservableObject {
                 state = .failed(error.localizedDescription)
             }
         }
+    }
+
+    private func record(_ progress: DownloadProgress) {
+        let now = Date()
+        if let last = lastSample, last.file == progress.fileIndex {
+            let elapsed = now.timeIntervalSince(last.time)
+            // 采样间隔太短时跳过，避免速度跳动。
+            guard elapsed >= 0.5 else {
+                self.progress = progress
+                return
+            }
+            let speed = Double(progress.fileBytesDownloaded - last.bytes) / elapsed
+            bytesPerSecond = bytesPerSecond.map { $0 * 0.6 + speed * 0.4 } ?? speed
+        } else if lastSample?.file != progress.fileIndex {
+            bytesPerSecond = nil
+        }
+        lastSample = (progress.fileIndex, progress.fileBytesDownloaded, now)
+        self.progress = progress
+    }
+
+    /// 当前文件剩余时间；没有总大小或速度时为 nil。
+    var remainingSeconds: Double? {
+        guard let progress, let total = progress.fileTotalBytes, let speed = bytesPerSecond, speed > 0 else { return nil }
+        return Double(max(0, total - progress.fileBytesDownloaded)) / speed
     }
 
     func cancel() {
@@ -67,11 +97,16 @@ struct DownloadSheet: View {
             if model.state == .downloading {
                 if let progress = model.progress {
                     ProgressView(value: progress.fileFraction ?? 0)
-                    Text("\(progress.fileIndex + 1)/\(progress.fileCount) · \(progress.currentFile) · \(formatBytes(UInt64(max(0, progress.fileBytesDownloaded))))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    HStack {
+                        Text("文件 \(progress.fileIndex + 1)/\(progress.fileCount) · \(progress.currentFile)")
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Text(transferText(progress))
+                            .monospacedDigit()
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 } else {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
@@ -113,5 +148,19 @@ struct DownloadSheet: View {
         }
         .padding(20)
         .frame(width: 480)
+    }
+
+    private func transferText(_ progress: DownloadProgress) -> String {
+        var parts = [formatBytes(UInt64(max(0, progress.fileBytesDownloaded)))]
+        if let total = progress.fileTotalBytes {
+            parts[0] += " / " + formatBytes(UInt64(max(0, total)))
+        }
+        if let speed = model.bytesPerSecond, speed > 0 {
+            parts.append(formatBytes(UInt64(speed)) + "/s")
+        }
+        if let remaining = model.remainingSeconds {
+            parts.append(remaining < 60 ? "本文件剩余 \(Int(remaining)) 秒" : "本文件剩余约 \(Int(remaining / 60) + 1) 分钟")
+        }
+        return parts.joined(separator: " · ")
     }
 }

@@ -52,6 +52,8 @@ struct MenuBarView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(environment.statusSummary)
+        .accessibilityHint("打开模型页")
     }
 
     private var links: some View {
@@ -250,5 +252,6 @@ private struct MenuLinkButton: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
+        .accessibilityLabel(title)
     }
 }

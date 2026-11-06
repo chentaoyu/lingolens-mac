@@ -75,6 +75,7 @@ struct MeetingsView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("刷新")
+                .accessibilityLabel("刷新会议列表")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -488,6 +489,7 @@ private struct TranscriptRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 TextField("", text: $text, axis: .vertical)
                     .textFieldStyle(.plain)
+                    .accessibilityLabel("\(entry.speaker.displayName)的发言")
                     .font(.system(size: 12))
                     .onSubmit { onSave(text) }
 
@@ -635,11 +637,11 @@ private struct MinutesTemplateSheet: View {
 }
 
 extension AudioChannel {
-    /// 与字幕浮窗一致：我 = 蓝，对方 = 橙。
+    /// 说话人配色，与字幕浮窗共用 Assets 中的颜色。
     var color: Color {
         switch self {
-        case .me: return Color(red: 0.22, green: 0.53, blue: 0.95)
-        case .other: return Color(red: 0.91, green: 0.58, blue: 0.21)
+        case .me: return .speakerMe
+        case .other: return .speakerOther
         }
     }
 }

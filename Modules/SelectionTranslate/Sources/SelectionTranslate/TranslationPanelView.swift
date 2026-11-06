@@ -49,12 +49,14 @@ public struct TranslationPanelView: View {
                 Image(systemName: model.isPinned ? "pin.fill" : "pin")
             }
             .help(model.isPinned ? "取消固定（点外部会关闭）" : "固定浮窗（点外部不关闭）")
+            .accessibilityLabel(model.isPinned ? "取消固定" : "固定浮窗")
             .foregroundStyle(model.isPinned ? Color.accentColor : Color.secondary)
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
             }
             .help("关闭（Esc）")
+            .accessibilityLabel("关闭")
             .foregroundStyle(.secondary)
         }
         .buttonStyle(.plain)
@@ -134,6 +136,8 @@ public struct TranslationPanelView: View {
             }
             .buttonStyle(.plain)
             .help("点击编辑原文")
+            .accessibilityLabel("原文：\(model.originalText)")
+            .accessibilityHint("点击编辑")
         }
     }
 

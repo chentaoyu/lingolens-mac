@@ -54,6 +54,7 @@ public struct SubtitlePanelView: View {
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.18)) { isHovering = hovering }
         }
+        .environment(\.colorScheme, .dark)
     }
 
     private var lines: [SubtitleLine] {
@@ -93,6 +94,7 @@ public struct SubtitlePanelView: View {
                     .iconHitArea()
             }
             .help(model.isPaused ? "继续滚动字幕" : "暂停滚动（转写不受影响）")
+            .accessibilityLabel(model.isPaused ? "继续" : "暂停")
 
             HStack(spacing: 2) {
                 ForEach(SubtitleSizePreset.allCases, id: \.self) { preset in
@@ -118,6 +120,7 @@ public struct SubtitlePanelView: View {
                 )
                 .frame(width: 80)
                 .controlSize(.mini)
+                .accessibilityLabel("背景透明度")
             }
             .help("背景透明度")
 
@@ -128,12 +131,14 @@ public struct SubtitlePanelView: View {
                     .iconHitArea()
             }
             .help("开启点击穿透（之后从菜单栏关闭）")
+            .accessibilityLabel("开启点击穿透")
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .iconHitArea()
             }
             .help("关闭字幕（菜单栏可重新打开）")
+            .accessibilityLabel("关闭字幕")
         }
         .buttonStyle(.plain)
         .font(.system(size: 11))
@@ -180,10 +185,11 @@ public struct SubtitlePanelView: View {
         }
     }
 
+    /// 颜色来自 App 的 Assets.xcassets（模块链接进 App 后从主 bundle 读取）。
     private func channelColor(_ channel: AudioChannel) -> Color {
         switch channel {
-        case .me: return Color(red: 0.22, green: 0.53, blue: 0.95)
-        case .other: return Color(red: 0.91, green: 0.58, blue: 0.21)
+        case .me: return Color("SpeakerMe", bundle: .main)
+        case .other: return Color("SpeakerOther", bundle: .main)
         }
     }
 }
