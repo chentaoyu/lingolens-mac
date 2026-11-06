@@ -107,3 +107,44 @@ struct HotkeyTests {
         #expect(HotkeySpec.normalizedModifiers(0xFFFF) == 256 | 512 | 2048 | 4096)
     }
 }
+
+@Suite("语言选择")
+struct LanguageSettingsTests {
+    @Test("音频会话默认自动识别对方语言")
+    func audioLanguageDefaults() {
+        let settings = AppSettings()
+        #expect(settings.audioSession.otherLanguage == AudioLanguageSettings.automatic)
+        #expect(settings.audioSession.meLanguage == "zh-Hans")
+        #expect(AudioLanguageSettings.locales(for: AudioLanguageSettings.automatic) == ["zh-Hans", "en"])
+        #expect(AudioLanguageSettings.locales(for: "ja") == ["ja"])
+        #expect(AudioLanguageSettings.displayName(AudioLanguageSettings.automatic) == "自动识别")
+    }
+
+    @Test("字幕目标语言默认中文，旧版每路语言字段可以兼容解码")
+    func subtitleTargetLanguage() throws {
+        let json = #"""
+        {"subtitle":{"other":{"translate":true,"targetLanguage":"en"},"me":{"translate":false,"targetLanguage":"en"}}}
+        """#
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+        #expect(settings.subtitle.targetLanguage == "zh-Hans")
+        #expect(settings.subtitle.other.translate == true)
+        #expect(settings.subtitle.me.translate == false)
+
+        var updated = settings
+        updated.subtitle.targetLanguage = "en"
+        let roundTrip = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(updated))
+        #expect(roundTrip.subtitle.targetLanguage == "en")
+    }
+
+    @Test("语言标识归一：zh_CN 与 zh-Hans 视为同一门语言")
+    func languageNormalization() {
+        #expect(SubtitleLanguage.canonical("zh_CN") == "zh-Hans")
+        #expect(SubtitleLanguage.canonical("zh-Hans") == "zh-Hans")
+        #expect(SubtitleLanguage.canonical("zh_TW") == "zh-Hant")
+        #expect(SubtitleLanguage.canonical("en_US") == "en")
+        #expect(SubtitleLanguage.isSame("zh_CN", "zh-Hans"))
+        #expect(!SubtitleLanguage.isSame("en", "zh-Hans"))
+        #expect(!SubtitleLanguage.isSame("zh-Hant", "zh-Hans"))
+        #expect(!SubtitleLanguage.isSame("", "zh-Hans"))
+    }
+}

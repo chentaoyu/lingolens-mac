@@ -5,12 +5,21 @@ public struct TranscriptionEvent: Sendable, Equatable {
     public let channel: AudioChannel
     public let text: String
     public let isFinal: Bool
+    /// 这句话被识别成的语言（与设置里的语言标识一致，如 `zh-Hans` / `en`）。
+    public let language: String?
     public let timestamp: Date
 
-    public init(channel: AudioChannel, text: String, isFinal: Bool, timestamp: Date = Date()) {
+    public init(
+        channel: AudioChannel,
+        text: String,
+        isFinal: Bool,
+        language: String? = nil,
+        timestamp: Date = Date()
+    ) {
         self.channel = channel
         self.text = text
         self.isFinal = isFinal
+        self.language = language
         self.timestamp = timestamp
     }
 }

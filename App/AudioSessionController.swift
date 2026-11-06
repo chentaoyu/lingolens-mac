@@ -70,9 +70,16 @@ final class AudioSessionController: ObservableObject {
         guard state != .running, state != .starting else { return }
         let config = settingsStore.settings.audioSession
 
-        var languages: [AudioChannel: String] = [:]
-        if config.captureSystemAudio { languages[.other] = config.otherLanguage }
-        if config.captureMicrophone { languages[.me] = config.meLanguage }
+        var languages: [AudioChannel: [String]] = [:]
+        var languageLabels: [AudioChannel: String] = [:]
+        if config.captureSystemAudio {
+            languages[.other] = AudioLanguageSettings.locales(for: config.otherLanguage)
+            languageLabels[.other] = config.otherLanguage
+        }
+        if config.captureMicrophone {
+            languages[.me] = AudioLanguageSettings.locales(for: config.meLanguage)
+            languageLabels[.me] = config.meLanguage
+        }
         guard !languages.isEmpty else {
             state = .failed("请至少选择一路音频来源")
             statusText = "未选择音频来源"
@@ -90,15 +97,15 @@ final class AudioSessionController: ObservableObject {
 
         do {
             if config.recordMeetings {
-                let meta = try await meetingStore.create(title: nil, languages: languages)
+                let meta = try await meetingStore.create(title: nil, languages: languageLabels)
                 currentMeeting = meta
                 isRecordingMeeting = true
             }
 
-            for (channel, locale) in languages {
+            for (channel, identifiers) in languages {
                 statusText = "准备\(channel.displayName)语音模型…"
                 let session = SpeechTranscriptionSession(channel: channel)
-                let events = try await session.start(localeIdentifier: locale)
+                let events = try await session.start(localeIdentifiers: identifiers)
                 sessions[channel] = session
                 eventTasks[channel] = Task { @MainActor [weak self] in
                     for await event in events {
@@ -107,7 +114,7 @@ final class AudioSessionController: ObservableObject {
                 }
             }
 
-            activeLanguages = languages
+            activeLanguages = languageLabels
             statusText = "等待音频…"
             let stream = try capture.start(
                 options: AudioCaptureOptions(
@@ -210,7 +217,12 @@ final class AudioSessionController: ObservableObject {
         guard event.isFinal, let lineID else { return }
 
         guard isRecordingMeeting, let meeting = currentMeeting else {
-            translation.enqueue(id: lineID, channel: event.channel, text: event.text)
+            translation.enqueue(
+                id: lineID,
+                channel: event.channel,
+                text: event.text,
+                sourceLanguage: event.language
+            )
             return
         }
 
@@ -223,7 +235,12 @@ final class AudioSessionController: ObservableObject {
         Task {
             // 先落盘再翻译，保证翻译回写时条目已存在。
             try? await meetingStore.append(entry, to: meeting.id)
-            translation.enqueue(id: lineID, channel: event.channel, text: event.text)
+            translation.enqueue(
+                id: lineID,
+                channel: event.channel,
+                text: event.text,
+                sourceLanguage: event.language
+            )
         }
     }
 

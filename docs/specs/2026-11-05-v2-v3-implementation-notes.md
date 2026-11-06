@@ -161,3 +161,31 @@ RMS 不为 0；用真实中文语音铺成 9 声道验证，修复前识别结�
 修复：`MicrophoneCapture` **不再开启 voice processing**，让回音消除让位给系统音频采集。
 代价：外放时对方的声音会从麦克风串进来（`me` 通道可能重复转写对方的话），**建议开会戴耳机**。
 如果以后要做回音消除，必须同时换掉系统音频的采集方式（VP 与进程 Tap 不能共存）。
+
+### 对方语言自动识别 + 统一目标语言
+
+需求：开会时不想每次手动选「对方说什么语言」；目标语言默认中文，对方说中文时只要文字记录，
+不要「中文译中文」。
+
+识别（Transcriber）：
+- `SpeechTranscriptionSession.start(localeIdentifiers:)` 支持一次挂多个 `SpeechTranscriber`
+  （同一个 `SpeechAnalyzer` 喂同一路音频），设置里的「自动识别」展开成 `["zh-Hans", "en"]`。
+- 每个 final 结果从 `AttributedString` 的 `transcriptionConfidence` 取平均置信度；
+  `TranscriptionLanguageTracker` 用「当前语言最近一条 final 的置信度」做门槛切换语言：
+  `max(0.45, 当前 - 0.05)`，明显更好才切；同一句已经上屏过的只切语言、不重复一行。
+- 置信度 `>= 0.85` 的 final 直接采信；更低的先压 2.5 秒，等另一种语言的结果到了再二选一，
+  避免把「拼音式英文」或「硬凑的中文」闪到屏幕上。多语言模式在定下第一句之前不出草稿。
+
+实测（真实中英文语音走系统音频 + 麦克风两路）：
+
+| 音频 | 中文模型 | 英文模型 |
+|---|---|---|
+| 中文「会议开始之前…」 | final 0.97 | final 0.26（拼音式噪声） |
+| 英文「Let us confirm…」 | final 0.63（硬凑的中文） | final 0.98 |
+
+翻译（LiveSubtitle）：
+- `SubtitleSettings.targetLanguage` 是全局目标语言（默认 `zh-Hans`），不再每路各存一个。
+- `SubtitleTranslationPolicy`：翻译开关打开、且源语言≠目标语言时才送模型；
+  `SubtitleLanguage.canonical` 把 `zh_CN`/`zh-Hans`/`en_US` 归一后比较，简繁视为不同语言。
+- 所以中文会议里对方说中文时不会再出现「中文译中文」，切成目标英文时才会翻译。
+

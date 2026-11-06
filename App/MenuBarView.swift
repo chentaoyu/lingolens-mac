@@ -282,6 +282,7 @@ private struct SessionCard: View {
 
     private func languagePicker(_ keyPath: WritableKeyPath<AudioSessionSettings, String>) -> some View {
         Picker("", selection: audioBinding(keyPath)) {
+            Text("自动识别").tag(AudioLanguageSettings.automatic)
             ForEach(TranslationPrompt.supportedTargetLanguages, id: \.id) { language in
                 Text(language.name).tag(language.id)
             }

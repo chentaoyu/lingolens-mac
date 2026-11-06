@@ -1,5 +1,6 @@
 import AudioCapture
 import Foundation
+import Settings
 import Testing
 import Transcriber
 @testable import LiveSubtitle
@@ -101,5 +102,31 @@ struct SubtitleStoreTests {
         #expect(store.lines[0].translation == "你好")
         store.markFailed(lineID: id!)
         #expect(store.lines[0].failed)
+    }
+}
+
+@Suite("翻译跳过规则")
+struct SubtitleTranslationPolicyTests {
+    @Test("源语言等于目标语言时不翻译")
+    func skipsSameLanguage() {
+        let enabled = SubtitleChannelSettings(translate: true)
+        #expect(!SubtitleTranslationPolicy.shouldTranslate(
+            channel: enabled, targetLanguage: "zh-Hans", sourceLanguage: "zh-Hans"
+        ))
+        #expect(!SubtitleTranslationPolicy.shouldTranslate(
+            channel: enabled, targetLanguage: "zh-Hans", sourceLanguage: "zh_CN"
+        ))
+        #expect(SubtitleTranslationPolicy.shouldTranslate(
+            channel: enabled, targetLanguage: "en", sourceLanguage: "zh-Hans"
+        ))
+        #expect(SubtitleTranslationPolicy.shouldTranslate(
+            channel: enabled, targetLanguage: "zh-Hans", sourceLanguage: "en"
+        ))
+        #expect(SubtitleTranslationPolicy.shouldTranslate(
+            channel: enabled, targetLanguage: "zh-Hans", sourceLanguage: nil
+        ))
+        #expect(!SubtitleTranslationPolicy.shouldTranslate(
+            channel: SubtitleChannelSettings(translate: false), targetLanguage: "en", sourceLanguage: "zh-Hans"
+        ))
     }
 }

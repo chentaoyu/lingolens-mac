@@ -36,7 +36,10 @@ struct AppSettingsView: View {
                 }
             }
             .listStyle(.sidebar)
+            // 子导航不再铺灰色侧边栏材质：白底，和右侧内容只靠中间这条线分割。
+            .scrollContentBackground(.hidden)
             .frame(width: 150)
+            .background(Color(nsColor: .textBackgroundColor))
 
             Divider()
 
@@ -122,22 +125,24 @@ struct AppSettingsView: View {
                 Toggle("系统音频（对方）", isOn: audioBinding(\.captureSystemAudio))
                 Toggle("麦克风（我）", isOn: audioBinding(\.captureMicrophone))
                 Toggle("记录会议", isOn: audioBinding(\.recordMeetings))
-                Picker("对方语言", selection: audioBinding(\.otherLanguage)) { languageOptions }
-                Picker("我的语言", selection: audioBinding(\.meLanguage)) { languageOptions }
+                Picker("对方语言", selection: audioBinding(\.otherLanguage)) { audioLanguageOptions }
+                Picker("我的语言", selection: audioBinding(\.meLanguage)) { audioLanguageOptions }
             } header: {
                 Text("音频会话")
             } footer: {
-                Text("会话开始时读取这些设置，运行中修改需停止后重新开始才生效。")
+                Text("会话开始时读取这些设置，运行中修改需停止后重新开始才生效。选「自动识别」时会同时加载中英两套语音模型，按每句话的置信度自动判断语言。")
                     .foregroundStyle(.secondary)
             }
 
-            Section("字幕翻译") {
+            Section {
+                Picker("目标语言", selection: subtitleBinding(\.targetLanguage)) { languageOptions }
                 Toggle("翻译对方的发言", isOn: subtitleBinding(\.other.translate))
-                Picker("对方译为", selection: subtitleBinding(\.other.targetLanguage)) { languageOptions }
-                    .disabled(!environment.settings.subtitle.other.translate)
                 Toggle("翻译我的发言", isOn: subtitleBinding(\.me.translate))
-                Picker("我译为", selection: subtitleBinding(\.me.targetLanguage)) { languageOptions }
-                    .disabled(!environment.settings.subtitle.me.translate)
+            } header: {
+                Text("字幕翻译")
+            } footer: {
+                Text("识别出的语言和目标语言相同时只显示原文，不再翻译（例如中文会议里不会出现「中文译中文」）。")
+                    .foregroundStyle(.secondary)
             }
 
             Section("字幕浮窗") {
@@ -314,6 +319,13 @@ struct AppSettingsView: View {
         ForEach(TranslationPrompt.supportedTargetLanguages, id: \.id) { language in
             Text(language.name).tag(language.id)
         }
+    }
+
+    /// 识别语言多一个「自动识别」选项（内部值 "auto"）。
+    @ViewBuilder
+    private var audioLanguageOptions: some View {
+        Text("自动识别").tag(AudioLanguageSettings.automatic)
+        languageOptions
     }
 
     private var sectionBinding: Binding<SettingsSection?> {

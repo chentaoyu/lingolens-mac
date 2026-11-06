@@ -1,0 +1,10 @@
+{
+  "description": "为经常参加英文会议、阅读外文资料的中文职场人士提供本地翻译、实时双语字幕和会议纪要，帮助高效沟通与整理信息。",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

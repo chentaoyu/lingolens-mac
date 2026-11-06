@@ -60,37 +60,40 @@ public struct GeneralSettings: Codable, Sendable, Equatable {
     }
 }
 
+/// 单路字幕的开关；目标语言是全局的，见 `SubtitleSettings.targetLanguage`。
 public struct SubtitleChannelSettings: Codable, Sendable, Equatable {
     public var translate: Bool
-    public var targetLanguage: String
 
-    public init(translate: Bool, targetLanguage: String) {
+    public init(translate: Bool) {
         self.translate = translate
-        self.targetLanguage = targetLanguage
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        // 旧版本每路各存一个 targetLanguage，现在统一到 SubtitleSettings，解码时忽略即可。
         translate = try container.decodeIfPresent(Bool.self, forKey: .translate) ?? false
-        targetLanguage = try container.decodeIfPresent(String.self, forKey: .targetLanguage) ?? "zh-Hans"
     }
 }
 
-/// 字幕浮窗的两路语言与翻译开关。
+/// 字幕浮窗的语言与显示设置。
 public struct SubtitleSettings: Codable, Sendable, Equatable {
     public var other: SubtitleChannelSettings
     public var me: SubtitleChannelSettings
+    /// 统一目标语言：识别出的语言与它相同时只显示原文，不做翻译。
+    public var targetLanguage: String
     public var fontSize: Double
     public var opacity: Double
 
     public init(
-        other: SubtitleChannelSettings = .init(translate: true, targetLanguage: "zh-Hans"),
-        me: SubtitleChannelSettings = .init(translate: false, targetLanguage: "en"),
+        other: SubtitleChannelSettings = .init(translate: true),
+        me: SubtitleChannelSettings = .init(translate: false),
+        targetLanguage: String = "zh-Hans",
         fontSize: Double = 20,
         opacity: Double = 0.82
     ) {
         self.other = other
         self.me = me
+        self.targetLanguage = targetLanguage
         self.fontSize = fontSize
         self.opacity = opacity
     }
@@ -98,13 +101,13 @@ public struct SubtitleSettings: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         other = try container.decodeIfPresent(SubtitleChannelSettings.self, forKey: .other)
-            ?? .init(translate: true, targetLanguage: "zh-Hans")
+            ?? .init(translate: true)
         me = try container.decodeIfPresent(SubtitleChannelSettings.self, forKey: .me)
-            ?? .init(translate: false, targetLanguage: "en")
+            ?? .init(translate: false)
+        targetLanguage = try container.decodeIfPresent(String.self, forKey: .targetLanguage) ?? "zh-Hans"
         fontSize = try container.decodeIfPresent(Double.self, forKey: .fontSize) ?? 20
         opacity = try container.decodeIfPresent(Double.self, forKey: .opacity) ?? 0.82
     }
-
 }
 
 public struct AudioSessionSettings: Codable, Sendable, Equatable {
@@ -118,7 +121,7 @@ public struct AudioSessionSettings: Codable, Sendable, Equatable {
         captureSystemAudio: Bool = true,
         captureMicrophone: Bool = true,
         recordMeetings: Bool = false,
-        otherLanguage: String = "en",
+        otherLanguage: String = AudioLanguageSettings.automatic,
         meLanguage: String = "zh-Hans"
     ) {
         self.captureSystemAudio = captureSystemAudio
@@ -133,7 +136,7 @@ public struct AudioSessionSettings: Codable, Sendable, Equatable {
         captureSystemAudio = try container.decodeIfPresent(Bool.self, forKey: .captureSystemAudio) ?? true
         captureMicrophone = try container.decodeIfPresent(Bool.self, forKey: .captureMicrophone) ?? true
         recordMeetings = try container.decodeIfPresent(Bool.self, forKey: .recordMeetings) ?? false
-        otherLanguage = try container.decodeIfPresent(String.self, forKey: .otherLanguage) ?? "en"
+        otherLanguage = try container.decodeIfPresent(String.self, forKey: .otherLanguage) ?? AudioLanguageSettings.automatic
         meLanguage = try container.decodeIfPresent(String.self, forKey: .meLanguage) ?? "zh-Hans"
     }
 }

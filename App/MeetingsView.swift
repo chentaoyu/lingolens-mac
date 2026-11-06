@@ -2,6 +2,7 @@ import AppKit
 import AudioCapture
 import Meetings
 import SelectionTranslate
+import Settings
 import SwiftUI
 
 struct MeetingsView: View {
@@ -623,7 +624,7 @@ struct MeetingsView: View {
         guard !languages.isEmpty else { return "未记录" }
         return AudioChannel.allCases.compactMap { channel in
             guard let identifier = languages[channel.rawValue] else { return nil }
-            return "\(channel.displayName)：\(identifier)"
+            return "\(channel.displayName)：\(AudioLanguageSettings.displayName(identifier))"
         }
         .joined(separator: " · ")
     }

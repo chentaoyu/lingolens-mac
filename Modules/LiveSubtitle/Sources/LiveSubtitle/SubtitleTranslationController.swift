@@ -5,6 +5,19 @@ import SceneChat
 import Settings
 import Transcriber
 
+/// 什么时候值得翻译：开关打开，且这句话的语言不是目标语言。
+public enum SubtitleTranslationPolicy {
+    public static func shouldTranslate(
+        channel: SubtitleChannelSettings,
+        targetLanguage: String,
+        sourceLanguage: String?
+    ) -> Bool {
+        guard channel.translate else { return false }
+        guard let sourceLanguage, !sourceLanguage.isEmpty else { return true }
+        return !SubtitleLanguage.isSame(sourceLanguage, targetLanguage)
+    }
+}
+
 /// 每路一个翻译队列，按设置决定是否翻译与目标语言。
 @MainActor
 public final class SubtitleTranslationController {
@@ -22,7 +35,15 @@ public final class SubtitleTranslationController {
         self.store = store
     }
 
-    public func enqueue(id: UUID, channel: AudioChannel, text: String) {
+    public func enqueue(id: UUID, channel: AudioChannel, text: String, sourceLanguage: String? = nil) {
+        let settings = settingsStore.settings.subtitle
+        let channelSettings = channel == .me ? settings.me : settings.other
+        // 源语言已经等于目标语言时没有翻译的必要（中文会议里「中文译中文」只会白跑模型）。
+        guard SubtitleTranslationPolicy.shouldTranslate(
+            channel: channelSettings,
+            targetLanguage: settings.targetLanguage,
+            sourceLanguage: sourceLanguage
+        ) else { return }
         worker(for: channel).enqueue(id: id, text: text)
     }
 
@@ -85,6 +106,11 @@ public final class SubtitleTranslationController {
             return channel == .me ? subtitle.me : subtitle.other
         }
 
+        /// 目标语言是全局设置：所有字幕都译成这一种，源语言相同则跳过。
+        private var targetLanguage: String {
+            settingsStore.settings.subtitle.targetLanguage
+        }
+
         private func process() async {
             defer { task = nil }
 
@@ -105,7 +131,7 @@ public final class SubtitleTranslationController {
                 do {
                     let messages = SubtitlePrompt.messages(
                         batch: batch,
-                        targetLanguage: settings.targetLanguage
+                        targetLanguage: targetLanguage
                     )
                     var parameters = settingsStore.settings.scene(.liveSubtitle).parameters
                     if batch.ids.count > 1 {
