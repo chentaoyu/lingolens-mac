@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# 构建 Release → 签名 → 打 dmg → 生成 Sparkle appcast。
-# 用法：SIGN_IDENTITY="LingoLens Self Sign" DOWNLOAD_URL_PREFIX="https://.../releases/download/v0.1.2/" scripts/release.sh
+# 构建 Release → 签名 → 打 dmg → 生成 Sparkle appcast（写入 site/appcast.xml）→ 可选发布 GitHub Release。
+# 用法：SIGN_IDENTITY="LingoLens Self Sign" PUBLISH=1 scripts/release.sh
+#   PUBLISH=1 时自动 gh release create，并提交推送 site/appcast.xml 触发 Pages 部署。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"            # 默认 ad-hoc；建议换成固定的自签名证书
-DOWNLOAD_URL_PREFIX="${DOWNLOAD_URL_PREFIX:-}"  # dmg 的下载地址前缀（以 / 结尾）
+REPO=chentaoyu/lingolens-mac
 BUILD_DIR=build
 DIST_DIR=dist
 
@@ -28,10 +29,23 @@ hdiutil create -volname LingoLens -srcfolder "$STAGE" -ov -format UDZO "$DMG"
 rm -rf "$STAGE"
 codesign --force --sign "$SIGN_IDENTITY" "$DMG"
 
-SPARKLE_BIN="$BUILD_DIR/SourcePackages/artifacts/sparkle/Sparkle/bin"
-ARGS=()
-[[ -n "$DOWNLOAD_URL_PREFIX" ]] && ARGS+=(--download-url-prefix "$DOWNLOAD_URL_PREFIX")
-"$SPARKLE_BIN/generate_appcast" ${ARGS[@]+"${ARGS[@]}"} "$DIST_DIR"
-
+# 只用本次 dmg 生成 appcast：Sparkle 只需要最新一项，也避免旧版本套用错误的下载前缀。
+TAG="v$VERSION"
+FEED_DIR=$(mktemp -d)
+cp "$DMG" "$FEED_DIR/"
+"$BUILD_DIR/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast" \
+  --download-url-prefix "https://github.com/$REPO/releases/download/$TAG/" "$FEED_DIR"
+cp "$FEED_DIR/appcast.xml" site/appcast.xml
+rm -rf "$FEED_DIR"
 echo "✅ $DMG"
-echo "✅ $DIST_DIR/appcast.xml —— 上传 dmg 到下载地址，appcast.xml 放到 SPARKLE_FEED_URL"
+echo "✅ site/appcast.xml"
+
+if [[ "${PUBLISH:-}" == "1" ]]; then
+  gh release create "$TAG" "$DMG" --repo "$REPO" --title "LingoLens $VERSION" --generate-notes
+  git add site/appcast.xml
+  git commit -m "LingoLens macOS - chore(发布): 更新 appcast 至 $VERSION"
+  git push
+  echo "✅ 已发布 $TAG，Pages 部署完成后客户端即可检测到更新"
+else
+  echo "👉 手动发布：gh release create $TAG $DMG，然后提交推送 site/appcast.xml"
+fi

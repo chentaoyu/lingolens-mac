@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LingoLens · 在 Mac 本地完成的翻译与会议助手</title>
+<meta name="description" content="划词翻译、实时双语字幕、会议纪要，全部在你的 Mac 上本地运行。">
+<link rel="icon" href="favicon.png">
+<style>
+  :root {
+    --accent: #4F5BD5; --accent-2: #3338A6;
+    --me: #3787F2; --other: #E99535;
+    --bg: #F7F7FB; --card: #FFFFFF; --text: #1C1D26; --muted: #6B6E80; --line: rgba(20, 22, 50, .08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --accent: #7D86FF; --accent-2: #5C63E8;
+      --me: #69A9FF; --other: #FFB45C;
+      --bg: #0F1016; --card: #181A23; --text: #ECEDF5; --muted: #9A9DB0; --line: rgba(255, 255, 255, .08);
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { overflow-x: hidden; }
+  body {
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+    background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
+
+  /* 顶栏 */
+  nav { display: flex; align-items: center; justify-content: space-between; padding: 20px 0; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; color: var(--text); }
+  .brand img { width: 28px; height: 28px; }
+  nav .links { display: flex; gap: 24px; font-size: 14px; }
+  nav .links a { color: var(--muted); }
+  nav .links a:hover { color: var(--text); }
+
+  /* 首屏 */
+  .hero { position: relative; text-align: center; padding: 64px 0 40px; }
+  .hero::before {
+    content: ""; position: absolute; top: -80px; left: 50%; width: 1100px; height: 560px; z-index: -1; transform: translateX(-50%);
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 22%, transparent), transparent);
+  }
+  .hero .icon { width: 112px; height: 112px; filter: drop-shadow(0 18px 30px rgba(51, 56, 166, .35)); }
+  .hero h1 { font-size: clamp(30px, 7vw, 60px); line-height: 1.12; letter-spacing: -.02em; margin: 28px 0 16px; }
+  .nw { white-space: nowrap; }
+  .hero h1 em { font-style: normal; background: linear-gradient(120deg, var(--accent), var(--other)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .hero p.lead { font-size: 19px; color: var(--muted); max-width: 560px; margin: 0 auto; }
+  .cta { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-top: 36px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 10px; padding: 14px 28px; border-radius: 14px;
+    background: linear-gradient(180deg, var(--accent), var(--accent-2)); color: #fff; font-weight: 600; font-size: 17px;
+    box-shadow: 0 10px 24px -8px color-mix(in srgb, var(--accent) 70%, transparent); transition: transform .15s;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn svg { width: 18px; height: 18px; }
+  .meta { font-size: 13px; color: var(--muted); }
+
+  /* 演示舞台：用 CSS 画出翻译浮窗与字幕浮窗 */
+  .stage {
+    position: relative; margin: 56px auto 0; height: 380px; border-radius: 22px; overflow: hidden;
+    background: linear-gradient(135deg, #2B2F6B, #4F5BD5 55%, #E99535 130%);
+    box-shadow: 0 30px 60px -30px rgba(20, 22, 60, .5);
+  }
+  .menubar { height: 26px; background: rgba(255,255,255,.18); backdrop-filter: blur(20px); display: flex; justify-content: flex-end; align-items: center; gap: 14px; padding: 0 14px; }
+  .menubar span { width: 14px; height: 14px; border-radius: 4px; background: rgba(255,255,255,.55); }
+  .menubar img { width: 16px; height: 16px; filter: brightness(0) invert(1); }
+  .doc {
+    position: absolute; left: 6%; top: 64px; width: 46%; padding: 22px 24px; border-radius: 14px;
+    background: rgba(255,255,255,.92); color: #2a2c3a; font-size: 14px; line-height: 1.75; text-align: left;
+  }
+  .doc mark { background: color-mix(in srgb, #4F5BD5 25%, transparent); color: inherit; border-radius: 3px; padding: 1px 2px; }
+  .popover {
+    position: absolute; left: 20%; top: 150px; width: 280px; padding: 14px 16px; border-radius: 14px; text-align: left;
+    background: rgba(28, 29, 38, .86); backdrop-filter: blur(24px); color: #fff; font-size: 14px;
+    box-shadow: 0 20px 40px -12px rgba(0,0,0,.5); border: 1px solid rgba(255,255,255,.1);
+  }
+  .popover small { display: block; color: rgba(255,255,255,.55); font-size: 12px; margin-bottom: 6px; }
+  .subs {
+    position: absolute; right: 5%; bottom: 28px; width: 46%; padding: 14px 18px; border-radius: 16px; text-align: left;
+    background: rgba(15, 16, 22, .78); backdrop-filter: blur(24px); color: #fff; font-size: 15px;
+    border: 1px solid rgba(255,255,255,.1);
+  }
+  .subs .line { display: flex; gap: 10px; align-items: baseline; padding: 4px 0; }
+  .subs .who { font-size: 12px; font-weight: 600; flex: none; }
+  .subs .other .who { color: #FFB45C; } .subs .me .who { color: #69A9FF; }
+  .subs .src { display: block; color: rgba(255,255,255,.5); font-size: 12px; }
+
+  /* 功能 */
+  section { padding: 88px 0 0; }
+  h2 { font-size: 30px; letter-spacing: -.01em; text-align: center; }
+  .sub { text-align: center; color: var(--muted); margin-top: 8px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 40px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 26px; }
+  .card .ic { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; margin-bottom: 16px; color: #fff; }
+  .card .ic svg { width: 22px; height: 22px; }
+  .card h3 { font-size: 18px; margin-bottom: 6px; }
+  .card p { color: var(--muted); font-size: 15px; }
+  kbd { font: 12px ui-monospace, SFMono-Regular, monospace; padding: 2px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); }
+
+  .privacy {
+    margin-top: 18px; display: flex; gap: 22px; align-items: center; padding: 26px 30px; border-radius: 18px;
+    background: linear-gradient(120deg, color-mix(in srgb, var(--accent) 14%, var(--card)), var(--card));
+    border: 1px solid var(--line);
+  }
+  .privacy svg { width: 42px; height: 42px; flex: none; color: var(--accent); }
+  .privacy p { color: var(--muted); font-size: 15px; }
+
+  /* 安装 */
+  .steps { counter-reset: s; display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 40px; }
+  .step { counter-increment: s; background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 24px; }
+  .step::before { content: counter(s); display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 600; font-size: 14px; margin-bottom: 14px; }
+  .step h3 { font-size: 16px; margin-bottom: 6px; }
+  .step p { color: var(--muted); font-size: 14px; }
+  pre { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); font: 12px/1.5 ui-monospace, SFMono-Regular, monospace; white-space: pre-wrap; word-break: break-all; }
+
+  footer { margin: 96px 0 0; padding: 28px 0 40px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; }
+
+  @media (max-width: 760px) {
+    .grid, .steps { grid-template-columns: 1fr; }
+    .stage { height: 420px; }
+    .doc { width: 88%; } .popover { left: 8%; top: 200px; width: 84%; } .subs { width: 90%; }
+    nav .links { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <a class="brand" href="./"><img src="icon.png" alt="">LingoLens</a>
+    <div class="links">
+      <a href="#features">功能</a>
+      <a href="#install">安装</a>
+      <a href="https://github.com/chentaoyu/lingolens-mac/releases">版本历史</a>
+      <a href="https://github.com/chentaoyu/lingolens-mac">GitHub</a>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <img class="icon" src="icon.png" alt="LingoLens 图标">
+    <h1><span class="nw">看懂、听懂、记下</span><br><em class="nw">全在你的 Mac 上</em></h1>
+    <p class="lead">划词翻译、实时双语字幕、会议纪要。所有模型都在本机运行，不上传任何一句话。</p>
+    <div class="cta">
+      <a class="btn" id="download" href="https://github.com/chentaoyu/lingolens-mac/releases/latest">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19h14"/></svg>
+        <span id="download-label">下载 for Mac</span>
+      </a>
+      <span class="meta" id="download-meta">需要 Apple Silicon · macOS 26 或更高 · 免费</span>
+    </div>
+
+    <div class="stage" aria-hidden="true">
+      <div class="menubar"><span></span><span></span><img src="favicon.png" alt=""></div>
+      <div class="doc">
+        Large language models can now run entirely on-device. With Apple Silicon,
+        <mark>translation happens locally, without sending a single word to the cloud.</mark>
+        This changes how we think about privacy in everyday tools.
+      </div>
+      <div class="popover">
+        <small>英语 → 简体中文 · <kbd style="background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.15)">⌥D</kbd></small>
+        翻译在本地完成，不会向云端发送任何一个字。
+      </div>
+      <div class="subs">
+        <div class="line other"><span class="who">对方</span><span>我们下周三之前能把方案定下来吗？<span class="src">Can we finalize the plan before next Wednesday?</span></span></div>
+        <div class="line me"><span class="who">我</span><span>没问题，我周二发初稿给你。</span></div>
+      </div>
+    </div>
+  </header>
+
+  <section id="features">
+    <h2>三件事，一个菜单栏图标</h2>
+    <p class="sub">常驻菜单栏，需要时一个快捷键唤起，不打扰你的工作流。</p>
+    <div class="grid">
+      <div class="card">
+        <div class="ic" style="background:var(--accent)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M9 4v2m-3 0c0 4 3 7 6 8M12 6c0 4-3 7-7 9"/><path d="m13 20 4-9 4 9m-1.5-3h-5"/></svg></div>
+        <h3>划词翻译</h3>
+        <p>在任意应用里选中文字，按 <kbd>⌥D</kbd> 就地弹出译文，不用复制粘贴、不用切窗口。</p>
+      </div>
+      <div class="card">
+        <div class="ic" style="background:var(--other)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h2m3-5v10m4-13v16m4-11v6m4-4v2"/></svg></div>
+        <h3>实时双语字幕</h3>
+        <p>同时采集系统声音和麦克风，按「对方 / 我」分两路实时转写并翻译，开会、看视频都能用。</p>
+      </div>
+      <div class="card">
+        <div class="ic" style="background:var(--me)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></svg></div>
+        <h3>会议纪要</h3>
+        <p>会议结束自动保存完整转写，一键生成纪要，支持长会议分段与自定义模板导出。</p>
+      </div>
+    </div>
+    <div class="privacy">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+      <div>
+        <h3>完全本地，零云端</h3>
+        <p>基于 MLX 在 Apple Silicon 上运行开源模型，不接入任何外部模型服务。你的文字、声音和会议内容，永远只留在这台 Mac 上。</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <h2>安装</h2>
+    <p class="sub">LingoLens 目前未经 Apple 公证，首次打开需要手动放行一次，之后会通过内置更新自动升级。</p>
+    <div class="steps">
+      <div class="step">
+        <h3>下载并拖入应用程序</h3>
+        <p>打开 dmg，把 LingoLens 拖到「应用程序」文件夹。</p>
+      </div>
+      <div class="step">
+        <h3>首次打开时放行</h3>
+        <p>如果提示"无法验证开发者"，前往「系统设置 → 隐私与安全性」，点击「仍要打开」。或在终端执行：</p>
+        <pre>xattr -dr com.apple.quarantine /Applications/LingoLens.app</pre>
+      </div>
+      <div class="step">
+        <h3>授权并开始使用</h3>
+        <p>按引导授予辅助功能、麦克风和系统录音权限，在「模型」页选择一个本地模型即可。</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>© 2026 LingoLens</span>
+    <span><a href="appcast.xml">更新源</a> · <a href="https://github.com/chentaoyu/lingolens-mac">GitHub</a></span>
+  </footer>
+</div>
+
+<script>
+  // 从 GitHub Releases 读取最新版本，把下载按钮直接指向 dmg。
+  fetch("https://api.github.com/repos/chentaoyu/lingolens-mac/releases/latest")
+    .then(r => r.ok ? r.json() : Promise.reject())
+    .then(rel => {
+      const dmg = rel.assets.find(a => a.name.endsWith(".dmg"));
+      if (!dmg) return;
+      document.getElementById("download").href = dmg.browser_download_url;
+      document.getElementById("download-label").textContent = `下载 ${rel.tag_name}`;
+      const mb = (dmg.size / 1048576).toFixed(0);
+      document.getElementById("download-meta").textContent =
+        `${mb} MB · 需要 Apple Silicon · macOS 26 或更高 · 免费`;
+    })
+    .catch(() => {});
+</script>
+</body>
+</html>
