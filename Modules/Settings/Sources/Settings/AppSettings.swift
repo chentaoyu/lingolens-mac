@@ -181,6 +181,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var subtitle: SubtitleSettings
     public var audioSession: AudioSessionSettings
     public var runtime: RuntimeInstallSettings
+    public var update: UpdateDownloadSettings
 
     public init(
         residentModelID: String? = nil,
@@ -191,7 +192,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         scanRoots: [String] = AppSettings.defaultScanRoots(),
         subtitle: SubtitleSettings = SubtitleSettings(),
         audioSession: AudioSessionSettings = AudioSessionSettings(),
-        runtime: RuntimeInstallSettings = RuntimeInstallSettings()
+        runtime: RuntimeInstallSettings = RuntimeInstallSettings(),
+        update: UpdateDownloadSettings = UpdateDownloadSettings()
     ) {
         self.residentModelID = residentModelID
         self.scenes = scenes
@@ -202,6 +204,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         self.subtitle = subtitle
         self.audioSession = audioSession
         self.runtime = runtime
+        self.update = update
     }
 
     public init(from decoder: Decoder) throws {
@@ -216,6 +219,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         audioSession = try container.decodeIfPresent(AudioSessionSettings.self, forKey: .audioSession) ?? AudioSessionSettings()
         runtime = (try? container.decodeIfPresent(RuntimeInstallSettings.self, forKey: .runtime))
             ?? RuntimeInstallSettings()
+        update = (try? container.decodeIfPresent(UpdateDownloadSettings.self, forKey: .update))
+            ?? UpdateDownloadSettings()
     }
 
     public static func defaultScanRoots() -> [String] {

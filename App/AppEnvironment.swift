@@ -312,6 +312,12 @@ final class AppEnvironment: ObservableObject {
         Task { await pythonEnvironment.cancelInstall() }
     }
 
+    func updateUpdateSettings(_ mutate: (inout UpdateDownloadSettings) -> Void) {
+        settingsStore.update { settings in
+            mutate(&settings.update)
+        }
+    }
+
     func updateRuntime(_ mutate: (inout RuntimeInstallSettings) -> Void) {
         settingsStore.update { settings in
             mutate(&settings.runtime)

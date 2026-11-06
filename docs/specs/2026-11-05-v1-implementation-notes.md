@@ -71,6 +71,17 @@
 - HF 下载：`/api/models/<repo>` 列文件，逐文件 Range 续传到 `.part`，完成后原子改名；支持取消和进度。
 - 删除：下载的模型删除文件；扫描 / 导入的只移出列表。
 
+### 3.3.1 自动更新（Sparkle）
+
+- `AppUpdater` 是 `SPUStandardUpdaterController` 的薄封装，同时实现 `SPUUpdaterDelegate`。
+- `didFindValidUpdate` 时并行测速「官方地址 + 内置镜像」（每个源 64KB Range 请求，
+  4 秒超时），结果缓存在内存里。
+- `willDownloadUpdate` 用 `UpdateDownloadResolver.choose` 改写 `request.url`：
+  官方可达时保持官方，镜像必须快 1.5 倍以上才切换，官方不可用时直接切镜像。
+- 下载失败时在 `didFinishUpdateCycleFor:error:` 里换下一个未尝试过的源重试一次。
+- 完整性依赖 appcast 的 EdDSA 签名，因此走第三方加速也不会被替换。
+- 设置项 `update.source`：`automatic` / `official` / `custom`（支持 `{url}` 占位符）。
+
 ### 3.4 设置
 
 - `~/Library/Application Support/LingoLens/settings.json`，300ms 防抖落盘。

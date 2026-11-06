@@ -109,6 +109,29 @@ struct AppSettingsView: View {
                 ))
                 Toggle("在 Dock 中显示", isOn: dockBinding)
             }
+            Section {
+                Picker("下载源", selection: updateBinding(\.source)) {
+                    ForEach(UpdateDownloadSource.allCases, id: \.self) { source in
+                        Text(source.displayName).tag(source)
+                    }
+                }
+                if environment.settings.update.source == .custom {
+                    TextField(
+                        "地址模板",
+                        text: updateBinding(\.customURLTemplate),
+                        prompt: Text("https://cdn.example.com/ 或 https://gh-proxy.com/{url}")
+                    )
+                }
+                LabeledContent("版本") {
+                    Text(AppUpdater.versionText)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("更新")
+            } footer: {
+                Text("更新包默认从 GitHub 下载，国内经常失败。自动模式会在发现新版本时测速，挑选可用的加速源；下载失败还会自动换源重试。自定义模板支持 {url} 占位符（镜像式），或不带占位符时按「前缀 + 文件名」拼接（自建 CDN）。")
+                    .foregroundStyle(.secondary)
+            }
             Section("帮助") {
                 LabeledContent("首次使用引导") {
                     Button("重新查看") { environment.presentOnboarding() }
@@ -396,6 +419,13 @@ struct AppSettingsView: View {
         Binding(
             get: { environment.settings.general[keyPath: keyPath] },
             set: { value in environment.updateGeneral { $0[keyPath: keyPath] = value } }
+        )
+    }
+
+    private func updateBinding<Value>(_ keyPath: WritableKeyPath<UpdateDownloadSettings, Value>) -> Binding<Value> {
+        Binding(
+            get: { environment.settings.update[keyPath: keyPath] },
+            set: { value in environment.updateUpdateSettings { $0[keyPath: keyPath] = value } }
         )
     }
 

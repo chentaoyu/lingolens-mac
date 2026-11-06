@@ -10,6 +10,7 @@ struct AppToast: Identifiable, Equatable {
     let id = UUID()
     let title: String
     let subtitle: String
+    var systemImage = "checkmark.circle.fill"
     var actionTitle: String?
     var action: Action?
 
@@ -25,7 +26,7 @@ struct ToastBanner: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "checkmark.circle.fill")
+            Image(systemName: toast.systemImage)
                 .font(.system(size: 17))
                 .foregroundStyle(Color.success)
                 .accessibilityHidden(true)
