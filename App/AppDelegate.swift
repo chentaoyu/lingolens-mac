@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 UserDefaults.standard.bool(forKey: "showInDock") ? .regular : .accessory
             )
             AppEnvironment.shared.start()
+            _ = AppUpdater.shared
 
             // 菜单栏应用首次启动时给一个可见反馈；之后保持静默常驻。
             let didOpenMainWindow = UserDefaults.standard.bool(forKey: "LingoLens.didOpenMainWindow")

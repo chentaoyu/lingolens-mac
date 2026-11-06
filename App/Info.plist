@@ -32,6 +32,12 @@
 	<string>LingoLens 需要录制系统音频，用于采集会议中“对方”的声音并实时转写。</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>LingoLens 使用系统语音识别在本机转写会议内容。</string>
+	<key>SUFeedURL</key>
+	<string>$(SPARKLE_FEED_URL)</string>
+	<key>SUPublicEDKey</key>
+	<string>$(SPARKLE_PUBLIC_KEY)</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

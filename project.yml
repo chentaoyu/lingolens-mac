@@ -15,6 +15,9 @@ options:
 packages:
   LingoLensModules:
     path: .
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.6.0
 
 settings:
   base:
@@ -47,7 +50,11 @@ targets:
         CURRENT_PROJECT_VERSION: "2"
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Sparkle 自动更新：appcast 地址与 EdDSA 公钥（generate_keys 输出）。
+        SPARKLE_FEED_URL: "https://example.com/lingolens/appcast.xml"
+        SPARKLE_PUBLIC_KEY: "MvtcAIAe4zgqoamrsZkGFEgpT01YbJaRbClUSSfbwKo="
     dependencies:
+      - package: Sparkle
       - package: LingoLensModules
         product: ModelRuntime
       - package: LingoLensModules

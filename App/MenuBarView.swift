@@ -114,6 +114,10 @@ struct MenuBarView: View {
                 closePanel()
                 environment.openLogsFolder()
             }
+            MenuLinkButton(title: "检查更新…", systemImage: "arrow.down.circle") {
+                closePanel()
+                AppUpdater.shared.checkForUpdates()
+            }
             MenuLinkButton(title: "退出 LingoLens", systemImage: "power", shortcut: "⌘Q") {
                 NSApp.terminate(nil)
             }

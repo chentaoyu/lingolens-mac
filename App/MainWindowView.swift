@@ -130,6 +130,7 @@ struct MainWindowView: View {
 /// 侧边栏底部：常驻模型与音频会话状态。
 private struct SidebarStatusFooter: View {
     @EnvironmentObject private var environment: AppEnvironment
+    @ObservedObject private var updater = AppUpdater.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -146,6 +147,14 @@ private struct SidebarStatusFooter: View {
             }
             Text("完全本地运行")
                 .foregroundStyle(.tertiary)
+            HStack(spacing: 6) {
+                Text(AppUpdater.versionText)
+                    .monospacedDigit()
+                Button("检查更新") { updater.checkForUpdates() }
+                    .buttonStyle(.link)
+                    .disabled(!updater.canCheckForUpdates)
+            }
+            .foregroundStyle(.tertiary)
         }
         .font(.caption)
         .foregroundStyle(.secondary)

@@ -10,3 +10,4 @@ xcuserdata/
 .DS_Store
 Resources/uv/uv
 dist/
+build/

@@ -12,7 +12,8 @@ struct LingoLensApp: App {
             MenuBarView()
                 .environmentObject(environment)
         } label: {
-            Label("LingoLens", systemImage: "character.bubble")
+            // 品牌标志的单色 template 版本，系统自动适配浅色 / 深色菜单栏。
+            Label { Text("LingoLens") } icon: { Image("MenuBarIcon") }
         }
         .menuBarExtraStyle(.window)
     }
