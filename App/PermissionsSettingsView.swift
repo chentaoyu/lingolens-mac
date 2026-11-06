@@ -8,12 +8,7 @@ struct PermissionsSettingsView: View {
     @State private var microphoneStatus = AVCaptureDevice.authorizationStatus(for: .audio)
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionTitle("权限")
-            Text("仅在用到对应功能时申请；拒绝后会退化到可用的替代方式。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
+        Group {
             permissionRow(
                 title: "辅助功能",
                 detail: "读取其他应用中选中的文本。未授权时退化为模拟 ⌘C，仍失败则打开空浮窗手动输入。",
@@ -61,13 +56,11 @@ struct PermissionsSettingsView: View {
                 }
                 .controlSize(.small)
             }
-            .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.secondary.opacity(0.05))
-            )
         }
         .onAppear(perform: refresh)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refresh()
+        }
     }
 
     private func permissionRow(
@@ -101,11 +94,6 @@ struct PermissionsSettingsView: View {
             Button("打开系统设置", action: openSettings)
                 .controlSize(.small)
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.secondary.opacity(0.05))
-        )
     }
 
     private func refresh() {

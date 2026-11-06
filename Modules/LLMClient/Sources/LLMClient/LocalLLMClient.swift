@@ -59,6 +59,7 @@ public struct LocalLLMClient: Sendable {
 
         var parser = SSEParser()
         var usage: ChatUsage?
+        var deltaCount = 0
 
         func handle(_ events: [SSEEvent]) {
             for event in events {
@@ -70,6 +71,7 @@ public struct LocalLLMClient: Sendable {
                     if firstTokenAt == nil {
                         firstTokenAt = clock.now
                     }
+                    deltaCount += 1
                     continuation.yield(.delta(delta))
                 }
                 if let chunkUsage = chunk.usage {
@@ -88,7 +90,7 @@ public struct LocalLLMClient: Sendable {
         let end = clock.now
         let duration = Self.seconds(start.duration(to: end))
         let timeToFirstToken = firstTokenAt.map { Self.seconds(start.duration(to: $0)) }
-        continuation.yield(.finished(ChatMetrics(timeToFirstToken: timeToFirstToken, duration: duration, usage: usage)))
+        continuation.yield(.finished(ChatMetrics(timeToFirstToken: timeToFirstToken, duration: duration, usage: usage, deltaCount: deltaCount)))
     }
 
     public static func encodeBody(_ request: ChatRequest) throws -> Data {

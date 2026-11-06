@@ -21,13 +21,18 @@ struct MeetingsView: View {
     @State private var searchText = ""
     @State private var minutesLanguage = "zh-Hans"
     @State private var showTemplateManager = false
+    @State private var meetingQuery = ""
+    @State private var isEditingMinutes = false
 
     var body: some View {
-        HSplitView {
+        // 用固定宽度的 HStack 而非 HSplitView：后者会按子视图理想宽度撑开，
+        // 把外层 NavigationSplitView 的侧边栏挤出窗口。
+        HStack(spacing: 0) {
             sidebar
-                .frame(minWidth: 220, idealWidth: 260, maxWidth: 320)
+                .frame(width: 240)
+            Divider()
             detailPane
-                .frame(minWidth: 540, maxWidth: .infinity)
+                .frame(minWidth: 460, maxWidth: .infinity)
         }
         .task { await reload() }
         .onChange(of: selectedID) { _, newValue in
@@ -74,6 +79,11 @@ struct MeetingsView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
 
+            TextField("搜索会议", text: $meetingQuery)
+                .textFieldStyle(.roundedBorder)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 8)
+
             Divider()
 
             if meetings.isEmpty {
@@ -84,7 +94,7 @@ struct MeetingsView: View {
                 )
             } else {
                 List(selection: $selectedID) {
-                    ForEach(meetings) { summary in
+                    ForEach(filteredMeetings) { summary in
                         VStack(alignment: .leading, spacing: 3) {
                             HStack(spacing: 6) {
                                 Text(summary.meta.title)
@@ -120,10 +130,14 @@ struct MeetingsView: View {
         if let detail {
             VStack(alignment: .leading, spacing: 12) {
                 meetingHeader(detail)
-                Divider()
-                transcriptSection(detail)
-                Divider()
-                minutesSection(detail)
+                VSplitView {
+                    transcriptSection(detail)
+                        .padding(.bottom, 10)
+                        .frame(minHeight: 160)
+                    minutesSection(detail)
+                        .padding(.top, 10)
+                        .frame(minHeight: 220)
+                }
             }
             .padding(16)
         } else {
@@ -172,7 +186,7 @@ struct MeetingsView: View {
                 Spacer()
                 TextField("搜索转写", text: $searchText)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 200)
+                    .frame(minWidth: 120, maxWidth: 200)
             }
 
             let visibleEntries = filteredEntries(detail)
@@ -215,7 +229,7 @@ struct MeetingsView: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 150)
+                .frame(width: 140)
 
                 Picker("输出语言", selection: $minutesLanguage) {
                     ForEach(TranslationPrompt.supportedTargetLanguages, id: \.id) { language in
@@ -223,61 +237,115 @@ struct MeetingsView: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 110)
-
-                Button(isGenerating ? "停止" : "生成纪要") {
-                    if isGenerating {
-                        generationTask?.cancel()
-                        isGenerating = false
-                        phaseText = "已停止"
-                    } else {
-                        generate(for: detail)
-                    }
-                }
-                .controlSize(.small)
-                .disabled(templates.isEmpty || detail.entries.isEmpty)
-
-                Button("保存") {
-                    Task {
-                        await environment.saveMinutes(minutesText, meetingID: detail.meta.id)
-                        phaseText = "已保存"
-                        await reload()
-                    }
-                }
-                .controlSize(.small)
-                .disabled(minutesText.isEmpty)
-
-                Button("复制") {
-                    let pasteboard = NSPasteboard.general
-                    pasteboard.clearContents()
-                    pasteboard.setString(minutesText, forType: .string)
-                    phaseText = "已复制 Markdown"
-                }
-                .controlSize(.small)
-                .disabled(minutesText.isEmpty)
+                .frame(width: 100)
 
                 Button("模板…") {
                     showTemplateManager = true
                 }
-                .controlSize(.small)
 
                 Spacer()
 
-                if !phaseText.isEmpty {
-                    Text(phaseText)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                if !minutesText.isEmpty && !isGenerating {
+                    Picker("", selection: $isEditingMinutes) {
+                        Text("预览").tag(false)
+                        Text("编辑").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
                 }
             }
+            .controlSize(.small)
 
+            minutesBody(detail)
+
+            HStack(spacing: 10) {
+                if isGenerating {
+                    ProgressView().controlSize(.small)
+                }
+                Text(phaseText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer()
+                if isGenerating {
+                    Button("停止") {
+                        generationTask?.cancel()
+                        isGenerating = false
+                        phaseText = "已停止"
+                    }
+                } else if !minutesText.isEmpty {
+                    Button("重新生成") { generate(for: detail) }
+                        .disabled(templates.isEmpty || detail.entries.isEmpty)
+                    if isEditingMinutes {
+                        Button("保存") {
+                            Task {
+                                await environment.saveMinutes(minutesText, meetingID: detail.meta.id)
+                                isEditingMinutes = false
+                                phaseText = "已保存"
+                                await reload()
+                            }
+                        }
+                    }
+                    Button("复制") {
+                        let pasteboard = NSPasteboard.general
+                        pasteboard.clearContents()
+                        pasteboard.setString(minutesText, forType: .string)
+                        phaseText = "已复制 Markdown"
+                    }
+                    Button("导出 .md…") { exportMinutes(title: detail.meta.title) }
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+            .controlSize(.small)
+        }
+    }
+
+    @ViewBuilder
+    private func minutesBody(_ detail: MeetingDetail) -> some View {
+        if minutesText.isEmpty && !isGenerating {
+            VStack(spacing: 10) {
+                Image(systemName: "doc.text.magnifyingglass")
+                    .font(.system(size: 28))
+                    .foregroundStyle(.tertiary)
+                Text("还没有会议纪要")
+                    .font(.system(size: 13, weight: .semibold))
+                Text(detail.entries.isEmpty ? "这场会议没有转写内容，无法生成纪要。" : "将使用完整转写在本机生成结构化纪要。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("生成纪要") { generate(for: detail) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(templates.isEmpty || detail.entries.isEmpty)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.secondary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+        } else if isEditingMinutes && !isGenerating {
             TextEditor(text: $minutesText)
                 .font(.system(size: 12, design: .monospaced))
-                .frame(minHeight: 180)
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
                         .strokeBorder(Color.secondary.opacity(0.2))
                 )
+        } else {
+            ScrollView {
+                MarkdownPreview(text: minutesText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+            }
+            .background(Color.secondary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    private func exportMinutes(title: String) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.init(filenameExtension: "md") ?? .plainText]
+        panel.nameFieldStringValue = "\(title).md"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try minutesText.write(to: url, atomically: true, encoding: .utf8)
+            phaseText = "已导出到 \(url.lastPathComponent)"
+        } catch {
+            environment.lastError = "导出失败：\(error.localizedDescription)"
         }
     }
 
@@ -287,6 +355,7 @@ struct MeetingsView: View {
         else { return }
 
         isGenerating = true
+        isEditingMinutes = false
         minutesText = ""
         phaseText = "准备生成…"
 
@@ -348,6 +417,12 @@ struct MeetingsView: View {
         phaseText = ""
     }
 
+    private var filteredMeetings: [MeetingSummary] {
+        let query = meetingQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return meetings }
+        return meetings.filter { $0.meta.title.localizedCaseInsensitiveContains(query) }
+    }
+
     private func filteredEntries(_ detail: MeetingDetail) -> [TranscriptEntry] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return detail.entries }
@@ -407,7 +482,7 @@ private struct TranscriptRow: View {
                 .padding(.horizontal, 5)
                 .padding(.vertical, 1)
                 .background(
-                    Capsule().fill(entry.speaker == .me ? Color.blue.opacity(0.75) : Color.green.opacity(0.75))
+                    Capsule().fill(entry.speaker.color.opacity(0.85))
                 )
 
             VStack(alignment: .leading, spacing: 2) {
@@ -556,5 +631,126 @@ private struct MinutesTemplateSheet: View {
             isNew = false
             loadSelection()
         }
+    }
+}
+
+extension AudioChannel {
+    /// 与字幕浮窗一致：我 = 蓝，对方 = 橙。
+    var color: Color {
+        switch self {
+        case .me: return Color(red: 0.22, green: 0.53, blue: 0.95)
+        case .other: return Color(red: 0.91, green: 0.58, blue: 0.21)
+        }
+    }
+}
+
+/// 纪要的轻量 Markdown 预览：标题、列表、任务项、表格与行内样式。
+private struct MarkdownPreview: View {
+    let text: String
+
+    private enum Block {
+        case line(String)
+        case table([[String]])
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                switch block {
+                case let .line(line): lineView(line)
+                case let .table(rows): tableView(rows)
+                }
+            }
+        }
+        .textSelection(.enabled)
+    }
+
+    /// 连续的 `|` 行合并为一张表，跳过 `| --- |` 分隔行。
+    private var blocks: [Block] {
+        var result: [Block] = []
+        var rows: [[String]] = []
+        func flush() {
+            if !rows.isEmpty { result.append(.table(rows)) }
+            rows = []
+        }
+        for raw in text.components(separatedBy: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix("|") else {
+                flush()
+                result.append(.line(raw))
+                continue
+            }
+            let cells = line
+                .trimmingCharacters(in: CharacterSet(charactersIn: "|"))
+                .components(separatedBy: "|")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            if cells.allSatisfy({ $0.allSatisfy { "-: ".contains($0) } }) { continue }
+            rows.append(cells)
+        }
+        flush()
+        return result
+    }
+
+    private func tableView(_ rows: [[String]]) -> some View {
+        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                GridRow {
+                    ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                        inline(cell)
+                            .font(.system(size: 12, weight: index == 0 ? .semibold : .regular))
+                            .foregroundStyle(index == 0 ? .secondary : .primary)
+                    }
+                }
+                if index == 0 {
+                    Divider().gridCellUnsizedAxes(.horizontal)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    @ViewBuilder
+    private func lineView(_ raw: String) -> some View {
+        let line = raw.trimmingCharacters(in: .whitespaces)
+        if line.isEmpty {
+            Spacer().frame(height: 2)
+        } else if let heading = strip(line, prefixes: ["### ", "## ", "# "]) {
+            inline(heading.text)
+                .font(.system(size: 18 - CGFloat(heading.level) * 2, weight: .semibold))
+                .padding(.top, 6)
+        } else if line.hasPrefix("- [ ] ") || line.hasPrefix("- [x] ") {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: line.hasPrefix("- [x] ") ? "checkmark.square" : "square")
+                    .foregroundStyle(.secondary)
+                inline(String(line.dropFirst(6)))
+            }
+            .font(.system(size: 13))
+        } else if line.hasPrefix("- ") || line.hasPrefix("* ") {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("•").foregroundStyle(.secondary)
+                inline(String(line.dropFirst(2)))
+            }
+            .font(.system(size: 13))
+        } else {
+            inline(line).font(.system(size: 13))
+        }
+    }
+
+    private func strip(_ line: String, prefixes: [String]) -> (level: Int, text: String)? {
+        for prefix in prefixes where line.hasPrefix(prefix) {
+            return (prefix.count - 2, String(line.dropFirst(prefix.count)))
+        }
+        return nil
+    }
+
+    private func inline(_ text: String) -> Text {
+        if let attributed = try? AttributedString(
+            markdown: text,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) {
+            return Text(attributed)
+        }
+        return Text(text)
     }
 }

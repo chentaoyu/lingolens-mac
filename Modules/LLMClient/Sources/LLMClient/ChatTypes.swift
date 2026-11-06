@@ -104,16 +104,24 @@ public struct ChatMetrics: Sendable, Equatable {
     public var timeToFirstToken: TimeInterval?
     public var duration: TimeInterval
     public var usage: ChatUsage?
+    /// 收到的非空增量片段数；server 不返回 usage 时用来估算生成速度。
+    public var deltaCount: Int
 
-    public init(timeToFirstToken: TimeInterval?, duration: TimeInterval, usage: ChatUsage?) {
+    public init(timeToFirstToken: TimeInterval?, duration: TimeInterval, usage: ChatUsage?, deltaCount: Int = 0) {
         self.timeToFirstToken = timeToFirstToken
         self.duration = duration
         self.usage = usage
+        self.deltaCount = deltaCount
     }
 
     public var tokensPerSecond: Double? {
-        guard let tokens = usage?.completionTokens, tokens > 0, duration > 0 else { return nil }
-        return Double(tokens) / duration
+        if let tokens = usage?.completionTokens, tokens > 0, duration > 0 {
+            return Double(tokens) / duration
+        }
+        // mlx_vlm 流式输出大致一个片段一个 token，只统计首字之后的生成时间。
+        let generation = duration - (timeToFirstToken ?? 0)
+        guard deltaCount > 1, generation > 0 else { return nil }
+        return Double(deltaCount - 1) / generation
     }
 }
 

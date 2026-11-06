@@ -102,3 +102,18 @@ struct LocalLLMClientTests {
         #expect(GenerationParameters.meetingMinutes.maxTokens == 4096)
     }
 }
+
+@Suite("生成速度")
+struct ChatMetricsTests {
+    @Test("有 usage 时按 completion_tokens 计算")
+    func usesUsage() {
+        let metrics = ChatMetrics(timeToFirstToken: 0.5, duration: 2, usage: ChatUsage(completionTokens: 40), deltaCount: 10)
+        #expect(metrics.tokensPerSecond == 20)
+    }
+
+    @Test("无 usage 时按增量片段数估算首字之后的速度")
+    func fallsBackToDeltaCount() {
+        let metrics = ChatMetrics(timeToFirstToken: 0.5, duration: 2.5, usage: nil, deltaCount: 41)
+        #expect(metrics.tokensPerSecond == 20)
+    }
+}

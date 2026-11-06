@@ -1,3 +1,4 @@
+import AppKit
 import Meetings
 import ModelLibrary
 import ModelRuntime
@@ -8,6 +9,7 @@ import SwiftUI
 struct HomeView: View {
     @EnvironmentObject private var environment: AppEnvironment
     @State private var recentMeetings: [MeetingSummary] = []
+    @State private var accessibilityTrusted = AccessibilityPermission.isTrusted
 
     var body: some View {
         ScrollView {
@@ -24,6 +26,10 @@ struct HomeView: View {
             .padding(24)
             .frame(maxWidth: 860, alignment: .leading)
             .frame(maxWidth: .infinity)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            // 用户去系统设置授权后回到应用，横幅随之更新。
+            accessibilityTrusted = AccessibilityPermission.isTrusted
         }
         .task(id: environment.meetingsRevision) {
             recentMeetings = Array(await environment.loadMeetings().prefix(3))
@@ -78,7 +84,7 @@ struct HomeView: View {
                     .buttonStyle(.borderedProminent)
             }
         }
-        if !AccessibilityPermission.isTrusted {
+        if !accessibilityTrusted {
             IssueBanner(
                 title: "未授予辅助功能权限",
                 message: "划词翻译会退化为模拟 ⌘C 读取选中文字，部分应用可能取不到。",
