@@ -2,5 +2,13 @@
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
         <title>LingoLens</title>
+        <item>
+            <title>0.1.2</title>
+            <pubDate>Fri, 06 Nov 2026 17:10:34 +0800</pubDate>
+            <sparkle:version>2</sparkle:version>
+            <sparkle:shortVersionString>0.1.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/chentaoyu/lingolens-mac/releases/download/v0.1.2/LingoLens-0.1.2.dmg" length="23819632" type="application/octet-stream" sparkle:edSignature="6ZkSJole7Kv973n9F4PFiN3nzT5Jami085EOtdDD3HL9zBJIoIS6OV71jGdZL4eq1Fb7Ts/l1JRmA6aq3fX7CQ=="/>
+        </item>
     </channel>
 </rss>
