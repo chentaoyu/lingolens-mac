@@ -1,5 +1,6 @@
 import Foundation
 import LLMClient
+import ModelRuntime
 
 public struct SceneSettings: Codable, Sendable, Equatable {
     public var useResidentModel: Bool
@@ -141,6 +142,35 @@ public struct AudioSessionSettings: Codable, Sendable, Equatable {
     }
 }
 
+/// 首次安装 Python 运行时使用的下载源与代理。安装成功后这些设置仅影响重装。
+public struct RuntimeInstallSettings: Codable, Sendable, Equatable {
+    public var packageSource: PackageIndexSource
+    public var customIndexURL: String
+    public var proxyURL: String
+
+    public init(
+        packageSource: PackageIndexSource = .automatic,
+        customIndexURL: String = "",
+        proxyURL: String = ""
+    ) {
+        self.packageSource = packageSource
+        self.customIndexURL = customIndexURL
+        self.proxyURL = proxyURL
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        packageSource = (try? container.decodeIfPresent(PackageIndexSource.self, forKey: .packageSource)) ?? .automatic
+        customIndexURL = (try? container.decodeIfPresent(String.self, forKey: .customIndexURL)) ?? ""
+        proxyURL = (try? container.decodeIfPresent(String.self, forKey: .proxyURL)) ?? ""
+    }
+
+    /// 转成 ModelRuntime 使用的安装配置。
+    public var installConfiguration: InstallConfiguration {
+        InstallConfiguration(source: packageSource, customIndexURL: customIndexURL, proxyURL: proxyURL)
+    }
+}
+
 public struct AppSettings: Codable, Sendable, Equatable {
     public var residentModelID: String?
     public var scenes: [String: SceneSettings]
@@ -150,6 +180,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var scanRoots: [String]
     public var subtitle: SubtitleSettings
     public var audioSession: AudioSessionSettings
+    public var runtime: RuntimeInstallSettings
 
     public init(
         residentModelID: String? = nil,
@@ -159,7 +190,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         modelContextOverrides: [String: Int] = [:],
         scanRoots: [String] = AppSettings.defaultScanRoots(),
         subtitle: SubtitleSettings = SubtitleSettings(),
-        audioSession: AudioSessionSettings = AudioSessionSettings()
+        audioSession: AudioSessionSettings = AudioSessionSettings(),
+        runtime: RuntimeInstallSettings = RuntimeInstallSettings()
     ) {
         self.residentModelID = residentModelID
         self.scenes = scenes
@@ -169,6 +201,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         self.scanRoots = scanRoots
         self.subtitle = subtitle
         self.audioSession = audioSession
+        self.runtime = runtime
     }
 
     public init(from decoder: Decoder) throws {
@@ -181,6 +214,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         scanRoots = try container.decodeIfPresent([String].self, forKey: .scanRoots) ?? AppSettings.defaultScanRoots()
         subtitle = try container.decodeIfPresent(SubtitleSettings.self, forKey: .subtitle) ?? SubtitleSettings()
         audioSession = try container.decodeIfPresent(AudioSessionSettings.self, forKey: .audioSession) ?? AudioSessionSettings()
+        runtime = (try? container.decodeIfPresent(RuntimeInstallSettings.self, forKey: .runtime))
+            ?? RuntimeInstallSettings()
     }
 
     public static func defaultScanRoots() -> [String] {

@@ -28,6 +28,11 @@ public struct RuntimePaths: Sendable, Hashable {
         )
     }
 
+    /// uv 的下载缓存。装在 App 数据目录里，重试/重装可以复用已下载的包，也不会被系统清理工具顺手删掉。
+    public var uvCacheDirectory: URL { appSupportDirectory.appendingPathComponent("cache/uv", isDirectory: true) }
+    /// uv 下载的独立 Python 解释器目录（重置运行时不会删掉，重装更快）。
+    public var pythonInstallDirectory: URL { appSupportDirectory.appendingPathComponent("python", isDirectory: true) }
+
     public var settingsFile: URL { appSupportDirectory.appendingPathComponent("settings.json", isDirectory: false) }
     public var libraryFile: URL { appSupportDirectory.appendingPathComponent("library.json", isDirectory: false) }
     public var pythonExecutable: URL { runtimeDirectory.appendingPathComponent("venv/bin/python3", isDirectory: false) }
@@ -37,7 +42,7 @@ public struct RuntimePaths: Sendable, Hashable {
     /// 创建所有目录，幂等。
     public func prepare() throws {
         let fileManager = FileManager.default
-        for directory in [appSupportDirectory, runtimeDirectory, modelsDirectory, meetingsDirectory, logsDirectory] {
+        for directory in [appSupportDirectory, runtimeDirectory, modelsDirectory, meetingsDirectory, logsDirectory, uvCacheDirectory, pythonInstallDirectory] {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         }
     }

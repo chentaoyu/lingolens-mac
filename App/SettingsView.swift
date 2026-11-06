@@ -3,6 +3,7 @@ import LiveSubtitle
 import LLMClient
 import Meetings
 import ModelLibrary
+import ModelRuntime
 import SelectionTranslate
 import Settings
 import SwiftUI
@@ -75,7 +76,7 @@ struct AppSettingsView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("会删除现有虚拟环境并重新安装 mlx-vlm，已下载的模型不受影响。")
+            Text("会删除现有虚拟环境并重新安装 mlx-vlm，已下载的模型和依赖缓存不受影响。")
         }
     }
 
@@ -293,9 +294,17 @@ struct AppSettingsView: View {
             }
             Section("运行时") {
                 LabeledContent {
-                    Text(environment.runtimeProgress.message)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(environment.runtimeProgress.message)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                        if let detail = environment.runtimeProgress.detail {
+                            Text(detail)
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(2)
+                        }
+                    }
                 } label: {
                     Label(
                         environment.runtimeInstalled ? "Python 环境已安装" : "Python 环境未就绪",
@@ -303,11 +312,48 @@ struct AppSettingsView: View {
                     )
                     .foregroundStyle(environment.runtimeInstalled ? Color.success : Color.warning)
                 }
+                if environment.isInstallingRuntime {
+                    if let fraction = environment.runtimeProgress.fraction {
+                        ProgressView(value: fraction)
+                    } else {
+                        ProgressView().progressViewStyle(.linear)
+                    }
+                }
                 HStack {
-                    Button("重新安装…") { showReinstallConfirm = true }
+                    if environment.isInstallingRuntime {
+                        Button("取消安装") { environment.cancelRuntimeInstall() }
+                    } else if environment.runtimeInstalled {
+                        Button("重新安装…") { showReinstallConfirm = true }
+                    } else {
+                        Button("安装运行时…") { Task { await environment.installRuntime() } }
+                    }
                     Button("打开应用数据目录") { environment.openAppSupportFolder() }
                     Button("打开日志文件夹") { environment.openLogsFolder() }
                 }
+            }
+            Section {
+                Picker("下载源", selection: runtimeBinding(\.packageSource)) {
+                    ForEach(PackageIndexSource.allCases, id: \.self) { source in
+                        Text(source.displayName).tag(source)
+                    }
+                }
+                if environment.settings.runtime.packageSource == .custom {
+                    TextField(
+                        "索引地址",
+                        text: runtimeBinding(\.customIndexURL),
+                        prompt: Text("https://example.com/pypi/simple/")
+                    )
+                }
+                TextField(
+                    "代理",
+                    text: runtimeBinding(\.proxyURL),
+                    prompt: Text("http://127.0.0.1:7890（可选）")
+                )
+            } header: {
+                Text("依赖下载")
+            } footer: {
+                Text("首次安装需要下载约 220MB 依赖。默认优先国内镜像，失败后自动回退官方 PyPI；代理会传给安装进程（留空则直连）。以上设置在下一次安装/重装时生效。")
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -350,6 +396,13 @@ struct AppSettingsView: View {
         Binding(
             get: { environment.settings.general[keyPath: keyPath] },
             set: { value in environment.updateGeneral { $0[keyPath: keyPath] = value } }
+        )
+    }
+
+    private func runtimeBinding<Value>(_ keyPath: WritableKeyPath<RuntimeInstallSettings, Value>) -> Binding<Value> {
+        Binding(
+            get: { environment.settings.runtime[keyPath: keyPath] },
+            set: { value in environment.updateRuntime { $0[keyPath: keyPath] = value } }
         )
     }
 

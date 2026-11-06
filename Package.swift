@@ -47,7 +47,7 @@ let package = Package(
         ),
         .target(
             name: "Settings",
-            dependencies: ["LLMClient"],
+            dependencies: ["LLMClient", "ModelRuntime"],
             path: "Modules/Settings/Sources/Settings"
         ),
         .target(

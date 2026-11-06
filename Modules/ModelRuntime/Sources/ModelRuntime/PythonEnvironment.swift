@@ -13,12 +13,15 @@ public enum InstallPhase: String, Sendable, Equatable {
 public struct InstallProgress: Sendable, Equatable {
     public let phase: InstallPhase
     public let message: String
+    /// 第二行说明：当前下载的包、体积、下载源或排障提示。
+    public let detail: String?
     /// 0...1，未知时为 nil。
     public let fraction: Double?
 
-    public init(phase: InstallPhase, message: String, fraction: Double? = nil) {
+    public init(phase: InstallPhase, message: String, detail: String? = nil, fraction: Double? = nil) {
         self.phase = phase
         self.message = message
+        self.detail = detail
         self.fraction = fraction
     }
 }
@@ -39,7 +42,7 @@ public extension CommandRunning {
     }
 }
 
-/// 基于 `Process` 的实现。
+/// 基于 `Process` 的实现。任务取消时向子进程发 SIGTERM，避免安装中途只能强杀 App。
 public struct ProcessCommandRunner: CommandRunning {
     public init() {}
 
@@ -72,13 +75,18 @@ public struct ProcessCommandRunner: CommandRunning {
             collector.consume(data)
         }
 
-        try process.run()
-
-        return await withCheckedContinuation { (continuation: CheckedContinuation<Int32, Never>) in
-            process.terminationHandler = { finished in
-                pipes.closeReadableEnds()
-                collector.flush()
-                continuation.resume(returning: finished.terminationStatus)
+        return try await withTaskCancellationHandler {
+            try process.run()
+            return await withCheckedContinuation { (continuation: CheckedContinuation<Int32, Never>) in
+                process.terminationHandler = { finished in
+                    pipes.closeReadableEnds()
+                    collector.flush()
+                    continuation.resume(returning: finished.terminationStatus)
+                }
+            }
+        } onCancel: {
+            if process.isRunning {
+                process.terminate()
             }
         }
     }
@@ -131,32 +139,53 @@ private final class LineCollector: @unchecked Sendable {
     }
 }
 
-private final class OutputTail: @unchecked Sendable {
+/// 收集 uv 输出：既用于错误信息，也用于把下载进度喂给 UI。
+final class InstallOutputCollector: @unchecked Sendable {
     private let lock = NSLock()
-    private let limit: Int
-    private var text = ""
+    private var parser = InstallOutputParser()
+    private var tail = ""
+    private var lastLineAt = Date()
 
-    init(limit: Int) {
-        self.limit = limit
-    }
+    private let tailLimit = 4000
 
-    func append(_ line: String) {
+    func reset() {
         lock.lock()
-        text += line + "\n"
-        if text.count > limit {
-            text = String(text.suffix(limit))
-        }
+        parser = InstallOutputParser()
+        tail = ""
+        lastLineAt = Date()
         lock.unlock()
     }
 
-    var value: String {
+    func consume(_ line: String) {
+        lock.lock()
+        parser.consume(line)
+        tail += line + "\n"
+        if tail.count > tailLimit {
+            tail = String(tail.suffix(tailLimit))
+        }
+        lastLineAt = Date()
+        lock.unlock()
+    }
+
+    func snapshot() -> (activity: InstallActivity, tail: String, silentFor: TimeInterval, didFail: Bool) {
         lock.lock()
         defer { lock.unlock() }
-        return text
+        return (parser.activity, tail, Date().timeIntervalSince(lastLineAt), parser.didFail)
+    }
+
+    var errorTail: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return tail
     }
 }
 
 /// 应用托管的 Python 环境：使用内置 uv 创建 venv 并安装固定版本的 mlx-vlm。
+///
+/// 首次安装要下载 70+ 个包（约 220MB），因此这里做了三件事：
+/// 1. 默认走国内镜像，失败自动回退官方 PyPI；
+/// 2. 把 uv 的输出解析成可读进度（当前包、已下载数量、已用时间、卡住提示）；
+/// 3. 固定 uv 缓存目录 + 可取消，避免中断后从头再来。
 public actor PythonEnvironment {
     public struct Marker: Codable, Sendable, Equatable {
         public var pythonVersion: String
@@ -174,20 +203,41 @@ public actor PythonEnvironment {
     private let spec: RuntimeSpec
     private let runner: any CommandRunning
     private let uvLocator: @Sendable () -> URL?
+    private var configuration: InstallConfiguration = .default
     private var installTask: Task<URL, Error>?
     private var continuations: [UUID: AsyncStream<InstallProgress>.Continuation] = [:]
     private(set) public var lastProgress: InstallProgress = .init(phase: .idle, message: "")
+
+    private var collector: InstallOutputCollector?
+    private var ticker: Task<Void, Never>?
+    private var installStartedAt = Date()
+    private var currentPhase: InstallPhase = .idle
+    private var currentSourceLabel: String?
+
+    /// 超过这个时长没有新输出就认为网络卡住了，在界面上给出提示。
+    private let stallThreshold: TimeInterval = 45
 
     public init(
         paths: RuntimePaths,
         spec: RuntimeSpec = .default,
         runner: any CommandRunning = ProcessCommandRunner(),
+        configuration: InstallConfiguration = .default,
         uvLocator: @escaping @Sendable () -> URL? = PythonEnvironment.defaultUVLocator
     ) {
         self.paths = paths
         self.spec = spec
         self.runner = runner
+        self.configuration = configuration
         self.uvLocator = uvLocator
+    }
+
+    /// 设置里的下载源/代理变化后调用；下一次安装生效。
+    public func update(configuration: InstallConfiguration) {
+        self.configuration = configuration
+    }
+
+    public func currentConfiguration() -> InstallConfiguration {
+        configuration
     }
 
     /// 安装进度流。多次订阅各自独立；晚订阅者会立刻收到最近一次进度。
@@ -218,6 +268,9 @@ public actor PythonEnvironment {
     }
 
     /// 确保环境存在，返回 python 解释器路径。并发调用共享同一个安装任务。
+    ///
+    /// 上次安装失败（没有 `installed.json` 或虚拟环境不完整）时这里会重新执行，
+    /// uv 缓存和已下载的包会被复用，不会从头再来。
     public func ensureInstalled() async throws -> URL {
         if let existing = installTask {
             return try await existing.value
@@ -233,7 +286,12 @@ public actor PythonEnvironment {
         return try await task.value
     }
 
-    /// 删除环境，用于手工重装。
+    /// 取消正在进行的安装（例如用户点「取消」）。
+    public func cancelInstall() {
+        installTask?.cancel()
+    }
+
+    /// 删除环境，用于手工重装。uv 缓存与 Python 解释器保留，重装不必重新下载。
     public func reset() throws {
         let fileManager = FileManager.default
         if fileManager.fileExists(atPath: paths.runtimeDirectory.path) {
@@ -243,40 +301,94 @@ public actor PythonEnvironment {
         emit(.init(phase: .idle, message: "环境已清除"))
     }
 
+    // MARK: - 安装
+
     private func performInstall() async throws -> URL {
         try paths.prepare()
 
         guard let uv = uvLocator() else {
-            let progress = InstallProgress(phase: .failed, message: "未找到 uv")
-            emit(progress)
+            emit(.init(phase: .failed, message: "未找到 uv"))
             throw RuntimeError.uvNotFound
+        }
+
+        let output = InstallOutputCollector()
+        collector = output
+        installStartedAt = Date()
+        currentSourceLabel = nil
+        startTicker()
+        defer {
+            stopTicker()
+            collector = nil
+            currentPhase = .idle
         }
 
         emit(.init(phase: .preparing, message: "准备 Python \(spec.pythonVersion) 环境", fraction: 0.05))
 
-        let venvResult = try await runCommand(
+        currentPhase = .creatingEnvironment
+        let venvExit = try await run(
             uv,
             ["venv", paths.runtimeDirectory.appendingPathComponent("venv").path, "--python", spec.pythonVersion],
-            phase: .creatingEnvironment
+            environment: baseEnvironment,
+            collector: output
         )
-        guard venvResult == 0 else {
-            throw RuntimeError.commandFailed(command: "uv venv", exitCode: venvResult, output: collectedOutput)
+        try checkCancellation(output)
+        guard venvExit == 0 else {
+            emit(.init(phase: .failed, message: "创建虚拟环境失败", detail: failureDetail(output)))
+            throw RuntimeError.commandFailed(command: "uv venv", exitCode: venvExit, output: output.errorTail)
         }
 
-        emit(.init(phase: .installingDependencies, message: "安装 mlx-vlm \(spec.mlxVLMVersion)", fraction: 0.25))
+        currentPhase = .installingDependencies
+        var lastError: RuntimeError?
+        let attempts = configuration.indexAttempts
 
-        let installExit = try await runCommand(
-            uv,
-            ["pip", "install", "--python", paths.pythonExecutable.path, "mlx-vlm==\(spec.mlxVLMVersion)"],
-            phase: .installingDependencies
-        )
-        guard installExit == 0 else {
-            throw RuntimeError.commandFailed(command: "uv pip install mlx-vlm", exitCode: installExit, output: collectedOutput)
+        for (offset, indexURL) in attempts.enumerated() {
+            if offset > 0 {
+                currentSourceLabel = indexURL?.host
+                emit(.init(
+                    phase: .installingDependencies,
+                    message: "上一个源失败，改用 \(currentSourceLabel ?? "官方 PyPI") 重试 · 已用 0:00",
+                    detail: lastError?.errorDescription,
+                    fraction: 0.2
+                ))
+            } else {
+                currentSourceLabel = indexURL?.host
+            }
+            output.reset()
+
+            var arguments = ["pip", "install", "--python", paths.pythonExecutable.path]
+            if let indexURL {
+                arguments += ["--index-url", indexURL.absoluteString]
+            }
+            arguments.append("mlx-vlm==\(spec.mlxVLMVersion)")
+
+            let exit = try await run(uv, arguments, environment: baseEnvironment, collector: output)
+            try checkCancellation(output)
+
+            if exit == 0 {
+                lastError = nil
+                break
+            }
+            lastError = .commandFailed(
+                command: indexURL.map { "uv pip install --index-url \($0.host ?? $0.absoluteString)" } ?? "uv pip install",
+                exitCode: exit,
+                output: output.errorTail
+            )
         }
 
-        emit(.init(phase: .verifying, message: "校验运行时", fraction: 0.9))
+        if let lastError {
+            emit(.init(
+                phase: .failed,
+                message: "依赖安装失败",
+                detail: "可在 设置 → 系统 → 运行时 换一个下载源或填写代理后重试"
+            ))
+            throw lastError
+        }
+
+        currentPhase = .verifying
+        emit(.init(phase: .verifying, message: "校验运行时", fraction: 0.95))
 
         guard FileManager.default.isExecutableFile(atPath: paths.pythonExecutable.path) else {
+            emit(.init(phase: .failed, message: "Python 环境不完整"))
             throw RuntimeError.pythonMissing(path: paths.pythonExecutable.path)
         }
 
@@ -290,16 +402,136 @@ public actor PythonEnvironment {
         return paths.pythonExecutable
     }
 
-    private var collectedOutput = ""
+    /// uv 子进程的环境变量：网络参数 + 固定缓存目录（重试时复用已下载的包）。
+    private var baseEnvironment: [String: String] {
+        var environment = configuration.uvEnvironment
+        environment["UV_CACHE_DIR"] = paths.uvCacheDirectory.path
+        environment["UV_PYTHON_INSTALL_DIR"] = paths.pythonInstallDirectory.path
+        return environment
+    }
 
-    private func runCommand(_ executable: URL, _ arguments: [String], phase: InstallPhase) async throws -> Int32 {
-        let tail = OutputTail(limit: 4000)
-        let exitCode = try await runner.run(executable: executable, arguments: arguments, environment: nil) { line in
-            tail.append(line)
+    private func run(
+        _ executable: URL,
+        _ arguments: [String],
+        environment: [String: String],
+        collector: InstallOutputCollector
+    ) async throws -> Int32 {
+        try await runner.run(executable: executable, arguments: arguments, environment: environment) { line in
+            collector.consume(line)
         }
-        collectedOutput = tail.value
-        emit(.init(phase: phase, message: phase == .creatingEnvironment ? "创建虚拟环境" : "安装依赖", fraction: nil))
-        return exitCode
+    }
+
+    private func checkCancellation(_ output: InstallOutputCollector) throws {
+        guard Task.isCancelled else { return }
+        emit(.init(phase: .failed, message: "安装已取消", detail: "再次安装会复用已下载的包"))
+        throw RuntimeError.cancelled
+    }
+
+    private func failureDetail(_ output: InstallOutputCollector) -> String? {
+        let lines = output.errorTail
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.hasPrefix("error:") || $0.hasPrefix("cause:") }
+        guard !lines.isEmpty else { return nil }
+        return lines.suffix(2).joined(separator: " ")
+    }
+
+    // MARK: - 进度
+
+    private func startTicker() {
+        stopTicker()
+        ticker = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                await self?.tick()
+            }
+        }
+    }
+
+    private func stopTicker() {
+        ticker?.cancel()
+        ticker = nil
+    }
+
+    private func tick() {
+        guard let collector, currentPhase == .installingDependencies || currentPhase == .creatingEnvironment else {
+            return
+        }
+        let snapshot = collector.snapshot()
+        guard snapshot.activity != .idle || currentPhase == .installingDependencies else { return }
+        emit(makeProgress(activity: snapshot.activity, silentFor: snapshot.silentFor))
+    }
+
+    private func makeProgress(activity: InstallActivity, silentFor: TimeInterval) -> InstallProgress {
+        let elapsed = Self.durationText(Date().timeIntervalSince(installStartedAt))
+
+        switch currentPhase {
+        case .creatingEnvironment:
+            var detail = "使用内置 uv 创建 Python \(spec.pythonVersion) 虚拟环境"
+            if silentFor > stallThreshold {
+                detail += " · 长时间无响应通常是在下载 Python 解释器，网络较慢时可稍等或重试"
+            }
+            return .init(phase: .creatingEnvironment, message: "准备 Python 环境 · 已用 \(elapsed)", detail: detail, fraction: 0.1)
+
+        case .installingDependencies:
+            var message = "下载依赖"
+            if let total = activity.totalPackages, activity.installedPackages < total {
+                if activity.downloadedPackages > 0 {
+                    message += " \(activity.downloadedPackages)/\(total)"
+                }
+            } else if let total = activity.totalPackages {
+                message = "安装 \(total) 个包"
+            }
+            message += " · 已用 \(elapsed)"
+
+            var details: [String] = []
+            if let label = currentSourceLabel { details.append(label) }
+            if let current = activity.currentPackage {
+                if let bytes = activity.currentPackageBytes {
+                    details.append("正在下载 \(current) \(formatBytes(UInt64(bytes)))")
+                } else {
+                    details.append("正在下载 \(current)")
+                }
+            }
+            if activity.downloadedBytes > 0, activity.knownBytes > 0 {
+                details.append("已下载 \(formatBytes(UInt64(activity.downloadedBytes))) / \(formatBytes(UInt64(activity.knownBytes)))")
+            }
+            if silentFor > stallThreshold {
+                details.append("网络较慢，可在 设置 → 系统 → 运行时 换下载源")
+            }
+
+            return .init(
+                phase: .installingDependencies,
+                message: message,
+                detail: details.joined(separator: " · "),
+                fraction: installFraction(activity)
+            )
+
+        default:
+            return lastProgress
+        }
+    }
+
+    /// 已完成的包数为主，已知体积比例为辅，两者取大。
+    private func installFraction(_ activity: InstallActivity) -> Double {
+        var ratio = 0.0
+        if let total = activity.totalPackages, total > 0 {
+            let completed = Double(max(activity.downloadedPackages, activity.installedPackages))
+            let inFlight = Double(max(0, activity.startedPackages - activity.downloadedPackages)) * 0.4
+            ratio = min(1, (completed + inFlight) / Double(total))
+        }
+        if activity.knownBytes > 0 {
+            ratio = max(ratio, min(1, Double(activity.downloadedBytes) / Double(activity.knownBytes)))
+        }
+        return 0.2 + 0.7 * ratio
+    }
+
+    private static func durationText(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded())
+        let minutes = total / 60
+        let rest = total % 60
+        return String(format: "%d:%02d", minutes, rest)
     }
 
     private func emit(_ progress: InstallProgress) {

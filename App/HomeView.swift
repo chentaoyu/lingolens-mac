@@ -161,6 +161,12 @@ struct HomeView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
+            if let detail = environment.runtimeProgress.detail {
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(2)
+            }
             if environment.isInstallingRuntime {
                 if let fraction = environment.runtimeProgress.fraction {
                     ProgressView(value: fraction)

@@ -48,6 +48,20 @@
 - 安装进度通过 `AsyncStream<InstallProgress>` 暴露给 UI；失败保留日志可重试。
 - uv 查找顺序：Bundle 内置 → `LINGOLENS_UV` → Homebrew / 用户目录 → PATH。
 
+**安装加速与可观测（0.1.3）**
+
+- 下载源：默认 `automatic` = 阿里云镜像优先，失败自动回退官方 PyPI；设置里可选清华 / 腾讯 /
+  自定义索引。每次尝试都会重新执行 `uv pip install`，但复用同一个 uv 缓存。
+- uv 环境变量：`UV_HTTP_TIMEOUT=60`、`UV_HTTP_RETRIES=5`、`UV_CONCURRENT_DOWNLOADS=8`、
+  `UV_NATIVE_TLS=1`，以及 `UV_CACHE_DIR`（App 数据目录）、`UV_PYTHON_INSTALL_DIR`；
+  设置里的代理写入 `HTTP(S)_PROXY` / `ALL_PROXY`。
+- 进度：`InstallOutputParser` 解析 uv 的非交互输出（`Resolved N packages`、
+  `Downloading <pkg> (12.3MiB)`、`Downloaded <pkg>`、`Installed N packages`），
+  2 秒一次把「已下载/总数 + 当前包 + 已用时间」推给 UI，45 秒无输出提示网络较慢。
+- 失败/取消：取消会向 uv 发 SIGTERM；没有 `installed.json` 就视为未安装，下次
+  `ensureInstalled()` 自动重试，已下载的包从缓存复用。
+
+
 ### 3.3 ModelLibrary
 
 - 扫描判定：目录含 `config.json` + 直系 `*.safetensors`，且 `config.quantization` 或目录名/父目录名含 `mlx`。

@@ -188,22 +188,32 @@ struct OnboardingView: View {
     private var runtimeDetail: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Text(environment.runtimeProgress.message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(environment.runtimeProgress.message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    if let detail = environment.runtimeProgress.detail {
+                        Text(detail)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(2)
+                    }
+                }
                 Spacer()
                 if environment.runtimeInstalled {
                     Label("已就绪", systemImage: "checkmark.circle.fill")
                         .font(.caption)
                         .foregroundStyle(Color.success)
-                } else if case .failed = environment.runtimeProgress.phase {
-                    Button("重试") {
-                        Task { await environment.installRuntime(force: true) }
+                } else if environment.isInstallingRuntime {
+                    Button("取消") { environment.cancelRuntimeInstall() }
+                        .controlSize(.small)
+                } else {
+                    // 失败后重试要复用已下载的包，不能 force 重置环境。
+                    Button(environment.runtimeProgress.phase == .failed ? "重试" : "安装") {
+                        Task { await environment.installRuntime() }
                     }
                     .controlSize(.small)
-                } else {
-                    ProgressView().controlSize(.small)
                 }
             }
 

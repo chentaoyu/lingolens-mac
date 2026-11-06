@@ -85,20 +85,30 @@ struct ModelsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                if let detail = environment.runtimeProgress.detail {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
+                }
+                if !environment.runtimeInstalled, let fraction = environment.runtimeProgress.fraction {
+                    ProgressView(value: fraction)
+                        .frame(maxWidth: 320)
+                }
             }
 
             Spacer()
 
-            if !environment.runtimeInstalled {
-                if case .failed = environment.runtimeProgress.phase {
-                    Button("重试") {
-                        Task { await environment.installRuntime() }
-                    }
-                    .controlSize(.small)
-                } else {
-                    ProgressView()
-                        .controlSize(.small)
+            if environment.isInstallingRuntime {
+                Button("取消") {
+                    environment.cancelRuntimeInstall()
                 }
+                .controlSize(.small)
+            } else if !environment.runtimeInstalled {
+                Button(environment.runtimeProgress.phase == .failed ? "重试" : "安装") {
+                    Task { await environment.installRuntime() }
+                }
+                .controlSize(.small)
             }
 
             Button("打开日志") {

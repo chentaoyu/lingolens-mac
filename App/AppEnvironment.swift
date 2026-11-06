@@ -73,7 +73,11 @@ final class AppEnvironment: ObservableObject {
         self.settingsStore = settingsStore
         self.settings = settingsStore.settings
 
-        let python = PythonEnvironment(paths: paths, spec: RuntimeSpec.fromBundle())
+        let python = PythonEnvironment(
+            paths: paths,
+            spec: RuntimeSpec.fromBundle(),
+            configuration: settingsStore.settings.runtime.installConfiguration
+        )
         self.pythonEnvironment = python
         self.serverPool = ServerPool(paths: paths, python: python)
         self.catalog = ModelCatalog(fileURL: paths.libraryFile)
@@ -124,6 +128,15 @@ final class AppEnvironment: ObservableObject {
         settingsStore.$settings
             .sink { [weak self] newSettings in
                 self?.settings = newSettings
+            }
+            .store(in: &cancellables)
+
+        // 下载源/代理只影响「下一次安装」，设置变化时同步给运行时。
+        settingsStore.$settings
+            .map(\.runtime.installConfiguration)
+            .removeDuplicates()
+            .sink { configuration in
+                Task { await python.update(configuration: configuration) }
             }
             .store(in: &cancellables)
 
@@ -292,6 +305,17 @@ final class AppEnvironment: ObservableObject {
     func installRuntimeIfNeeded() async {
         guard !runtimeInstalled else { return }
         await installRuntime(force: false)
+    }
+
+    /// 取消正在进行的安装（用户点「取消」或退出前）。
+    func cancelRuntimeInstall() {
+        Task { await pythonEnvironment.cancelInstall() }
+    }
+
+    func updateRuntime(_ mutate: (inout RuntimeInstallSettings) -> Void) {
+        settingsStore.update { settings in
+            mutate(&settings.runtime)
+        }
     }
 
     func installRuntime(force: Bool = false) async {
