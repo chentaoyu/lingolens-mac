@@ -15,3 +15,4 @@ sparkle-*.key
 ed25519-private*
 dist/
 build/
+.tools/
