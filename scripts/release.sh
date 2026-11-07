@@ -33,7 +33,16 @@ codesign --force --sign "$SIGN_IDENTITY" "$DMG"
 TAG="v$VERSION"
 FEED_DIR=$(mktemp -d)
 cp "$DMG" "$FEED_DIR/"
+
+# 签名私钥默认从登录钥匙串读取；指定 SPARKLE_ED_KEY_FILE 时用导出的密钥文件，
+# 便于在没导入过钥匙串的机器上发布。
+ED_KEY_ARGS=()
+if [[ -n "${SPARKLE_ED_KEY_FILE:-}" ]]; then
+  ED_KEY_ARGS=(--ed-key-file "$SPARKLE_ED_KEY_FILE")
+fi
+
 "$BUILD_DIR/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast" \
+  ${ED_KEY_ARGS[@]+"${ED_KEY_ARGS[@]}"} \
   --download-url-prefix "https://github.com/$REPO/releases/download/$TAG/" "$FEED_DIR"
 cp "$FEED_DIR/appcast.xml" site/appcast.xml
 rm -rf "$FEED_DIR"

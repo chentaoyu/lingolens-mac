@@ -9,5 +9,9 @@ DerivedData/
 xcuserdata/
 .DS_Store
 Resources/uv/uv
+# Sparkle 更新签名私钥：绝对不能进仓库
+sparkle-*.key
+*.ed25519
+ed25519-private*
 dist/
 build/
