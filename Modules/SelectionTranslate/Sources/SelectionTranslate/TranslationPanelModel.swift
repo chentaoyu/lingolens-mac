@@ -134,7 +134,7 @@ public final class TranslationPanelModel: ObservableObject {
     public var placeholderText: String {
         switch phase {
         case .idle:
-            return originalText.isEmpty ? "输入要翻译的文本，⌘↩ 开始翻译" : "⌘↩ 开始翻译"
+            return originalText.isEmpty ? "输入要翻译的文本，按 ↩ 开始翻译" : "按 ↩ 开始翻译"
         case .loading:
             return "模型加载中…"
         case .streaming:

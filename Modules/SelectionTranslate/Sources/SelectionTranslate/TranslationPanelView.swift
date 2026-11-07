@@ -3,7 +3,6 @@ import SwiftUI
 public struct TranslationPanelView: View {
     @ObservedObject private var model: TranslationPanelModel
     private let onClose: () -> Void
-    @FocusState private var editorFocused: Bool
 
     public init(model: TranslationPanelModel, onClose: @escaping () -> Void) {
         self.model = model
@@ -28,9 +27,6 @@ public struct TranslationPanelView: View {
         .onExitCommand(perform: onClose)
         .animation(.easeInOut(duration: 0.18), value: model.phase)
         .animation(.easeInOut(duration: 0.18), value: model.isEditingSource)
-        .onChange(of: model.isEditingSource) { _, editing in
-            editorFocused = editing
-        }
     }
 
     // MARK: - 头部
@@ -102,22 +98,24 @@ public struct TranslationPanelView: View {
     @ViewBuilder
     private var source: some View {
         if model.isEditingSource {
-            TextEditor(text: $model.originalText)
-                .font(.system(size: 13))
-                .scrollContentBackground(.hidden)
-                .focused($editorFocused)
-                .padding(6)
-                .frame(minHeight: 54, maxHeight: 120)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.primary.opacity(0.06))
-                )
-                .overlay(alignment: .bottomTrailing) {
-                    Text("⌘↩ 翻译")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                        .padding(6)
-                }
+            SourceTextEditor(
+                text: $model.originalText,
+                isFocused: model.isEditingSource,
+                onSubmit: { model.retranslate() },
+                onCancel: onClose
+            )
+            .padding(6)
+            .frame(minHeight: 54, maxHeight: 120)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.primary.opacity(0.06))
+            )
+            .overlay(alignment: .bottomTrailing) {
+                Text("↩ 翻译 · ⇧↩ 换行")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .padding(6)
+            }
         } else {
             Button {
                 model.isEditingSource = true
@@ -203,7 +201,7 @@ public struct TranslationPanelView: View {
                 Label("重译", systemImage: "arrow.clockwise")
             }
             .keyboardShortcut(.return, modifiers: .command)
-            .help("重新翻译（⌘↩）")
+            .help("重新翻译（回车）")
             .disabled(model.originalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
             Button {

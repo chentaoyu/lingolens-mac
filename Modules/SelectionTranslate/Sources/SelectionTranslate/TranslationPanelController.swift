@@ -3,12 +3,29 @@ import SwiftUI
 
 final class TranslationPanel: NSPanel {
     var onCancel: (() -> Void)?
+    var onSubmit: (() -> Void)?
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
+    override func sendEvent(_ event: NSEvent) {
+        // 输入框自己处理回车（↩ 翻译、⇧↩ 换行）；其余情况回车 = 重译 / 开始输入。
+        if event.type == .keyDown,
+           !(firstResponder is SubmitOnReturnTextView),
+           Self.isPlainReturn(event) {
+            onSubmit?()
+            return
+        }
+        super.sendEvent(event)
+    }
+
     override func cancelOperation(_ sender: Any?) {
         onCancel?()
+    }
+
+    /// 只认不带修饰键的主键盘回车与小键盘回车（大小写锁定不影响）。
+    private static func isPlainReturn(_ event: NSEvent) -> Bool {
+        ReturnKeyRule.submits(keyCode: event.keyCode, modifiers: event.modifierFlags)
     }
 }
 
@@ -124,11 +141,29 @@ public final class TranslationPanelController {
         panel.onCancel = { [weak self] in
             self?.hide()
         }
+        panel.onSubmit = { [weak self] in
+            self?.submit()
+        }
 
         self.model = model
         self.panel = panel
         self.delegate = delegate
         return panel
+    }
+
+    /// 未聚焦输入框时按回车：空文本先切到输入框，否则重新翻译。
+    private func submit() {
+        guard let model else { return }
+        if model.originalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            model.isEditingSource = true
+            return
+        }
+        switch model.phase {
+        case .loading, .streaming:
+            return
+        default:
+            model.retranslate()
+        }
     }
 
     private func position(_ panel: NSPanel, near point: NSPoint) {

@@ -94,7 +94,8 @@
 - Carbon `RegisterEventHotKey`，默认 `⌥D`，设置页可录制修改；修改后立即重新注册。
 - 取词顺序：AX `kAXSelectedTextAttribute` → 备份剪贴板 + 模拟 ⌘C + 恢复 → 空浮窗手动输入。
 - 浮窗为 `.nonactivatingPanel`，层级 `.floating`，不激活 App；单实例、再次触发替换内容。
-- 译文流式追加；底部显示“模型 · 首字延迟 · tok/s”；支持复制、固定、⌘↩ 重译、Esc 关闭。
+- 译文流式追加；底部显示“模型 · 首字延迟 · tok/s”；支持复制、固定、Esc 关闭。
+- 原文输入框用 `NSTextView` 接管按键：单独按 ↩ 立即翻译（无需组合键），⇧↩ / ⌥↩ 换行；非编辑态按 ↩ 重译，空文本时先切到输入框。
 - `NLLanguageRecognizer` 检测原文语言，与目标语言相同则自动改译英文。
 
 ## 4. 验证结果（Xcode 27.2）
