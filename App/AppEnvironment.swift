@@ -44,6 +44,10 @@ final class AppEnvironment: ObservableObject {
     @Published private(set) var isRefreshing = false
     @Published private(set) var isInstallingRuntime = false
     @Published private(set) var meetingsRevision = 0
+    /// Whisper 模型下载状态。
+    @Published private(set) var isDownloadingSpeechModel = false
+    @Published private(set) var speechModelProgress: SpeechModelInstaller.Progress?
+    @Published private(set) var speechModelInstalled = false
     @Published private(set) var lastError: AppError?
     /// 主窗口当前页；菜单栏等入口可直接跳转。
     @Published var mainTab: MainTab = .home
@@ -122,7 +126,8 @@ final class AppEnvironment: ObservableObject {
             settingsStore: settingsStore,
             subtitleStore: subtitleStore,
             translation: subtitleTranslation,
-            meetingStore: meetingStore
+            meetingStore: meetingStore,
+            paths: paths
         )
 
         settingsStore.$settings
@@ -181,6 +186,7 @@ final class AppEnvironment: ObservableObject {
 
         Task { @MainActor in
             await refreshModels()
+            await refreshSpeechModelState()
             await installRuntimeIfNeeded()
             await restoreResidentModel()
             await serverPool.startIdleTimer()
@@ -310,6 +316,44 @@ final class AppEnvironment: ObservableObject {
     /// 取消正在进行的安装（用户点「取消」或退出前）。
     func cancelRuntimeInstall() {
         Task { await pythonEnvironment.cancelInstall() }
+    }
+
+    /// 语音引擎与领域词表。
+    func updateSpeech(_ mutate: (inout SpeechSettings) -> Void) {
+        settingsStore.update { settings in
+            mutate(&settings.speech)
+        }
+    }
+
+    /// 刷新「Whisper 模型是否已就绪」。
+    func refreshSpeechModelState() async {
+        speechModelInstalled = SpeechModelInstaller(paths: paths).isInstalled
+    }
+
+    /// 从魔搭下载 Whisper 模型（约 464 MB）。
+    func downloadSpeechModel() async {
+        guard !isDownloadingSpeechModel else { return }
+        isDownloadingSpeechModel = true
+        defer {
+            isDownloadingSpeechModel = false
+            speechModelProgress = nil
+        }
+        do {
+            let installer = SpeechModelInstaller(paths: paths)
+            try await installer.install { progress in
+                Task { @MainActor in
+                    self.speechModelProgress = progress
+                }
+            }
+            await refreshSpeechModelState()
+            showToast(AppToast(title: "Whisper 模型已就绪", subtitle: "可在「音频会话」里切换引擎"))
+        } catch {
+            report(error, title: "Whisper 模型下载失败", code: "SPEECH_MODEL", actions: [
+                AppError.Action("重试", isPrimary: true) {
+                    Task { await self.downloadSpeechModel() }
+                }
+            ])
+        }
     }
 
     func updateUpdateSettings(_ mutate: (inout UpdateDownloadSettings) -> Void) {

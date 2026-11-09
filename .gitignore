@@ -16,3 +16,5 @@ ed25519-private*
 dist/
 build/
 .tools/
+__pycache__/
+*.pyc

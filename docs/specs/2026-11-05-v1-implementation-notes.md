@@ -94,6 +94,30 @@
 - 会话结束时把实际落盘的通道登记进 `meta.json` 的 `audioFiles`（旧数据没有该字段，解码时容忍缺失）；
   某一路没有产生音频就删掉空文件、不登记。
 
+### 3.3.3 Whisper 转写（可选引擎）
+
+系统 SpeechAnalyzer 的模型是「一句一种语言」，中英混说时英文缩写会被中文模型按读音音译
+（实测 ES →「淹死」、API latency → ATI LantonC）。补英文识别器无效：语言判定是句级的，
+而混说是词级的；AnalysisContext.contextualStrings（官方词表偏置）实测对 SpeechTranscriber
+完全没有影响，三个不同词表输出逐字节相同。
+
+因此增加 Whisper 引擎（mlx-audio，已在 mlx-vlm 的依赖里，无需新增包）：
+
+- **边车进程**：Resources/stt/lingolens_stt.py，常驻；标准输入灌 16 kHz 单声道 int16 PCM，
+  标准输出按行给 JSON。模型加载约 1.8 秒，逐句起进程不可行，所以必须常驻。
+- **自己断句**：能量检测。句尾静音 0.42 秒断句；超过 9 秒优先在「词间停顿」处切
+  （rms 小于 3 倍静音阈值），硬上限 25 秒（Whisper 窗口 30 秒）。
+  硬切会把字词劈开，实测会认错甚至输出繁体（那個查詢），软切判据就是为此加的。
+- **默认简体提示**：中文场景传 initial_prompt「以下是普通话会议记录，请用简体中文转写。」，
+  压住繁体输出。
+- **领域词表**：设置里的 speech.hotwords 传给 hotwords，能显著提高英文缩写命中率
+  （实测不加时 PRD → PRT、beta → Bit）。
+- **模型分发**：SpeechModelInstaller 从魔搭下载 whisper-large-v3-turbo-q4（464 MB，4 bit）。
+  不用 HuggingFace：本机直连完全超时，魔搭 2.6 MB/s。权重与 config 来自量化仓库，
+  分词器文件来自官方仓库，两个来源在清单里分开声明。
+- **取舍**：Whisper 按句出字幕，没有实时草稿；峰值内存约 0.73 GB。
+  未选 Whisper 或模型没下好时自动回退系统识别，不会没有字幕。
+
 ### 3.4 设置
 
 - `~/Library/Application Support/LingoLens/settings.json`，300ms 防抖落盘。

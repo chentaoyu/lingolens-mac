@@ -40,6 +40,9 @@ targets:
       - path: Resources/uv
         type: folder
         buildPhase: resources
+      - path: Resources/stt
+        type: folder
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lingolens.mac

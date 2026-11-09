@@ -154,12 +154,27 @@ struct AppSettingsView: View {
                 }
                 Picker("对方语言", selection: audioBinding(\.otherLanguage)) { audioLanguageOptions }
                 Picker("我的语言", selection: audioBinding(\.meLanguage)) { audioLanguageOptions }
+                Picker("识别引擎", selection: speechBinding(\.engine)) {
+                    ForEach(SpeechEngine.allCases, id: \.self) { engine in
+                        Text(engine.displayName).tag(engine)
+                    }
+                }
+                if environment.settings.speech.engine == .whisper {
+                    whisperStatusRow
+                    TextField(
+                        "领域词表",
+                        text: speechBinding(\.hotwords),
+                        prompt: Text("ES, API, PRD, deadline（逗号分隔）")
+                    )
+                }
             } header: {
                 Text("音频会话")
             } footer: {
                 Text("会话开始时读取这些设置，运行中修改需停止后重新开始才生效。选「自动识别」时会同时加载中英两套语音模型，按每句话的置信度自动判断语言。")
                     .foregroundStyle(.secondary)
                 Text("「同时保存音频」会把两路声音各存成 16 kHz 单声道 m4a（约 16 MB/小时），放在会议目录里，可用于事后复盘与重新转写。")
+                    .foregroundStyle(.secondary)
+                Text("中英混说时系统识别会把英文缩写按读音写成汉字（例如 ES → 淹死）。Whisper 是本地模型，这类词准得多，但字幕按句出现、不显示实时草稿；领域词表可进一步提高缩写命中率。")
                     .foregroundStyle(.secondary)
             }
 
@@ -387,7 +402,39 @@ struct AppSettingsView: View {
         .formStyle(.grouped)
     }
 
+    /// Whisper 模型状态 + 下载入口。
+    @ViewBuilder
+    private var whisperStatusRow: some View {
+        if let progress = environment.speechModelProgress {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("下载 (progress.currentFile) · (Int(progress.fraction * 100))%")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ProgressView(value: progress.fraction)
+            }
+        } else if environment.speechModelInstalled {
+            LabeledContent("Whisper 模型") {
+                Label("已就绪", systemImage: "checkmark.seal.fill")
+                    .foregroundStyle(Color.success)
+            }
+        } else {
+            LabeledContent("Whisper 模型") {
+                Button("下载（约 464 MB）") {
+                    Task { await environment.downloadSpeechModel() }
+                }
+                .disabled(environment.isDownloadingSpeechModel)
+            }
+        }
+    }
+
     // MARK: - 辅助
+
+    private func speechBinding<Value>(_ keyPath: WritableKeyPath<SpeechSettings, Value>) -> Binding<Value> {
+        Binding(
+            get: { environment.settings.speech[keyPath: keyPath] },
+            set: { value in environment.updateSpeech { $0[keyPath: keyPath] = value } }
+        )
+    }
 
     private var languageOptions: some View {
         ForEach(TranslationPrompt.supportedTargetLanguages, id: \.id) { language in

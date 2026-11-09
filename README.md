@@ -116,6 +116,25 @@ App 为菜单栏常驻应用（`LSUIElement`），启动后不显示 Dock 图标
    在“设置 → 音频会话”里选择来源、每路语言，并决定是否记录会议。
 7. 菜单栏“记录会议”开启时，结束后到主窗口“会议”页查看转写、生成纪要。
 
+### 中英混说识别不准怎么办
+
+系统语音识别（SpeechAnalyzer）是「一句话一种语言」，中英混说时英文缩写常被按读音写成
+汉字——实测 ES 会变成「淹死」，API latency 会变成 ATI LantonC。
+
+在「设置 → 音频与字幕」里把识别引擎切到 **Whisper（本地，更准）**，首次需要下载约 464 MB
+模型（从魔搭，实测 2.6 MB/s）。同一段音频的对照：
+
+| 词 | 系统识别 | Whisper |
+|---|---|---|
+| API latency | ATI LantonC | API latency |
+| deadline | dataline | deadline |
+| feature | feture | feature |
+| release | realase | release |
+| beta | fito | beta |
+
+代价：Whisper 按句出字幕，没有实时草稿；常驻内存约 0.73 GB。
+「领域词表」里填 ES, API, PRD, deadline 这类缩写还能进一步提高命中率。
+
 ### 更新下载失败怎么办
 
 - 更新包默认从 GitHub Releases 下载，国内可能超时或被重置。

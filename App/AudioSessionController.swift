@@ -3,6 +3,7 @@ import AVFoundation
 import Foundation
 import LiveSubtitle
 import Meetings
+import ModelRuntime
 import Settings
 import Transcriber
 
@@ -31,6 +32,7 @@ final class AudioSessionController: ObservableObject {
     private let subtitleStore: SubtitleStore
     private let translation: SubtitleTranslationController
     private let meetingStore: MeetingStore
+    private let paths: RuntimePaths
     private let capture = AudioCaptureController()
 
     private var sessions: [AudioChannel: SpeechTranscriptionSession] = [:]
@@ -39,6 +41,8 @@ final class AudioSessionController: ObservableObject {
     private var currentMeeting: MeetingMeta?
     /// 录音落盘：每路一个 m4a，会议目录下 `audio-<channel>.m4a`。
     private var recorders: [AudioChannel: ChannelAudioRecorder] = [:]
+    /// Whisper 边车进程，仅在选择 Whisper 引擎时存在。
+    private var whisperSessions: [AudioChannel: WhisperTranscriber] = [:]
 
     /// 缓冲区间累积的峰值，由电平循环按固定帧率取走并平滑衰减。
     private var levelPeak: [AudioChannel: Float] = [:]
@@ -48,12 +52,14 @@ final class AudioSessionController: ObservableObject {
         settingsStore: SettingsStore,
         subtitleStore: SubtitleStore,
         translation: SubtitleTranslationController,
-        meetingStore: MeetingStore
+        meetingStore: MeetingStore,
+        paths: RuntimePaths
     ) {
         self.settingsStore = settingsStore
         self.subtitleStore = subtitleStore
         self.translation = translation
         self.meetingStore = meetingStore
+        self.paths = paths
 
         translation.onTranslation = { [weak self] id, text in
             self?.applyTranslation(lineID: id, text: text)
@@ -107,7 +113,19 @@ final class AudioSessionController: ObservableObject {
                 }
             }
 
+            let useWhisper = settingsStore.settings.speech.engine == .whisper
+                && SpeechModelInstaller(paths: paths).isInstalled
+            if settingsStore.settings.speech.engine == .whisper, !useWhisper {
+                // 选了 Whisper 但模型还没装：退回系统识别，别让用户没有字幕。
+                statusText = "Whisper 模型未下载，暂用系统识别"
+                AppLog.write("[speech] whisper 模型未安装，回退系统识别")
+            }
+
             for (channel, identifiers) in languages {
+                if useWhisper {
+                    try await startWhisper(channel: channel, identifiers: identifiers)
+                    continue
+                }
                 statusText = "准备\(channel.displayName)语音模型…"
                 let session = SpeechTranscriptionSession(channel: channel)
                 let events = try await session.start(localeIdentifiers: identifiers)
@@ -169,6 +187,12 @@ final class AudioSessionController: ObservableObject {
         }
         sessions.removeAll()
 
+        // 边车要等最后一段转写完，放在取消事件消费者之前。
+        for transcriber in whisperSessions.values {
+            await transcriber.finish()
+        }
+        whisperSessions.removeAll()
+
         for task in eventTasks.values {
             task.cancel()
         }
@@ -187,6 +211,62 @@ final class AudioSessionController: ObservableObject {
         statusText = "已停止"
         onSessionFinished?()
         return finishedMeeting
+    }
+
+    // MARK: - Whisper
+
+    /// 一路 Whisper 边车。字幕按句出现，因此在音频会话里也按句上报。
+    private func startWhisper(channel: AudioChannel, identifiers: [String]) async throws {
+        statusText = "加载 Whisper 模型（\(channel.displayName)）…"
+        let settings = settingsStore.settings.speech
+        let installer = SpeechModelInstaller(paths: paths)
+        let script = try Self.sttScriptURL()
+
+        let transcriber = WhisperTranscriber(
+            modelDirectory: installer.directory,
+            pythonExecutable: paths.pythonExecutable,
+            scriptURL: script,
+            language: Self.whisperLanguage(for: identifiers),
+            hotwords: settings.hotwordList
+        )
+        let events = try await transcriber.start()
+        whisperSessions[channel] = transcriber
+
+        eventTasks[channel] = Task { @MainActor [weak self] in
+            for await event in events {
+                guard let self else { return }
+                switch event {
+                case let .final(segment):
+                    self.handle(TranscriptionEvent(
+                        channel: channel,
+                        text: segment.text,
+                        isFinal: true,
+                        language: identifiers.first
+                    ))
+                case let .failure(message):
+                    AppLog.write("[speech] whisper 失败：\(message)")
+                case .ready:
+                    break
+                }
+            }
+        }
+    }
+
+    /// 边车脚本路径：优先 Bundle，开发期回退到仓库里的资源目录。
+    private static func sttScriptURL() throws -> URL {
+        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("stt/lingolens_stt.py"),
+           FileManager.default.fileExists(atPath: bundled.path) {
+            return bundled
+        }
+        throw TranscriptionError.assetInstallationFailed("找不到语音转写脚本 lingolens_stt.py")
+    }
+
+    /// Whisper 只接受单种语言代码；设置里的 zh-Hans / en 映射过去。
+    private static func whisperLanguage(for identifiers: [String]) -> String {
+        for identifier in identifiers where identifier.hasPrefix("zh") {
+            return "zh"
+        }
+        return identifiers.first.map { $0.hasPrefix("en") ? "en" : $0 } ?? "zh"
     }
 
     // MARK: - 录音落盘
