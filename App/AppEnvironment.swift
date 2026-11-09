@@ -444,6 +444,8 @@ final class AppEnvironment: ObservableObject {
         let directory = try await downloader.download(repoID: repoID, progress: progress)
         let record = await catalog.registerDownloaded(at: directory, name: repoID)
         models = await catalog.all()
+        // 首次下载完成后直接设为常驻模型，用户不用再手动选一次。
+        applyDefaultResidentModelIfNeeded()
         return record
     }
 

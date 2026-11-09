@@ -62,7 +62,7 @@ struct ModelsView: View {
             Button {
                 showDownload = true
             } label: {
-                Label("从 Hugging Face 下载", systemImage: "arrow.down.circle")
+                Label("下载模型", systemImage: "arrow.down.circle")
             }
             .buttonStyle(.borderedProminent)
         }
@@ -193,7 +193,7 @@ struct ModelsView: View {
                 ContentUnavailableView(
                     "还没有模型",
                     systemImage: "square.stack.3d.up.slash",
-                    description: Text("点击右上角“导入”选择本地模型文件夹，或“下载”从 Hugging Face 获取 MLX 模型。")
+                    description: Text("点击右上角“导入”选择本地模型文件夹，或“下载”从模型仓库获取 MLX 模型（默认走魔搭，失败回退 Hugging Face）。")
                 )
                 .frame(height: 180)
             } else {
@@ -377,7 +377,7 @@ private struct ModelRow: View {
 }
 
 /// 页内下载卡：从 sheet 发起后仍留在页面上，可暂停/继续/取消。
-private struct ModelDownloadCard: View {
+struct ModelDownloadCard: View {
     @ObservedObject var state: ModelDownloadState
     let environment: AppEnvironment
 

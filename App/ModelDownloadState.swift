@@ -1,7 +1,7 @@
 import Foundation
 import ModelLibrary
 
-/// 模型下载的共享状态：模型页的页内下载卡和「从 Hugging Face 下载」面板共用同一份进度。
+/// 模型下载的共享状态：模型页的页内下载卡、引导页和「下载模型」面板共用同一份进度。
 /// 暂停通过取消任务实现，HFDownloader 会保留 .part 文件，继续时自动续传。
 @MainActor
 final class ModelDownloadState: ObservableObject {

@@ -12,12 +12,14 @@ struct OnboardingView: View {
     @State private var step = 0
     @State private var showDownload = false
     @State private var isImporting = false
+    /// 首启自动下载推荐模型：只在本次引导里触发一次，用户取消后不再自动重来。
+    @State private var didAutoStartModelDownload = false
 
     private var steps: [(label: String, title: String, summary: String)] {
         [
             ("欢迎", "欢迎使用 LingoLens", "翻译、实时字幕和会议纪要，全部在这台 Mac 上完成。数据不会离开设备。"),
             ("运行环境", "准备本地运行环境", "首次启动会创建独立的 Python 环境并安装 mlx-vlm，之后不再需要联网。"),
-            ("选择模型", "选一个本地模型", "划词翻译、字幕翻译和会议纪要共用这个常驻模型，之后可以随时更换。"),
+            ("选择模型", "准备本地模型", "首次会自动下载推荐的 Qwen3.5-4B（约 3 GB），划词翻译、字幕翻译和会议纪要共用它。"),
             ("授权", "允许 LingoLens 工作", "辅助功能用于读取选中文字，麦克风与系统音频用于转写。勾选辅助功能后需要重启一次才生效。"),
             ("试一试", "一切准备就绪", "在任意应用中选中一段文字，按下快捷键即可翻译。"),
         ]
@@ -49,6 +51,26 @@ struct OnboardingView: View {
                 Task { await environment.importModel(at: url) }
             }
         }
+        .onChange(of: step) { _, newStep in
+            // 走到「选择模型」且本机没有任何可用模型时，自动开始下载，不用用户自己点。
+            guard newStep == 2 else { return }
+            autoStartModelDownloadIfNeeded()
+        }
+        .onChange(of: environment.models) { _, _ in
+            autoStartModelDownloadIfNeeded()
+        }
+    }
+
+    /// 没有可用模型、也没有正在进行的下载时，自动下载推荐模型。
+    private func autoStartModelDownloadIfNeeded() {
+        guard !didAutoStartModelDownload else { return }
+        guard environment.models.filter(\.isAvailable).isEmpty else { return }
+        let state = environment.downloadState
+        guard !state.isActive, !state.isDownloading else { return }
+
+        didAutoStartModelDownload = true
+        state.repoID = HFDownloader.recommendedRepositoryID
+        state.start(environment: environment)
     }
 
     // MARK: - 步骤轨
@@ -232,20 +254,23 @@ struct OnboardingView: View {
     private var modelDetail: some View {
         VStack(alignment: .leading, spacing: 8) {
             if environment.models.filter(\.isAvailable).isEmpty {
-                Text("还没有可用的本地模型。推荐下载 Qwen3 4B（约 2.7 GB），或扫描已有的 MLX 模型文件夹。")
+                Text("正在自动下载 (HFDownloader.recommendedRepositoryID)（约 3 GB），完成后会自动设为常驻模型。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                // 下载进度直接复用模型页那块卡片，不另做一套。
+                if environment.downloadState.isActive {
+                    ModelDownloadCard(state: environment.downloadState, environment: environment)
+                }
+
                 HStack(spacing: 8) {
-                    Button {
-                        showDownload = true
-                    } label: {
-                        Label("从 Hugging Face 下载…", systemImage: "arrow.down.circle")
-                    }
                     Button {
                         isImporting = true
                     } label: {
-                        Label("导入本地文件夹…", systemImage: "folder.badge.plus")
+                        Label("我已有模型，导入文件夹…", systemImage: "folder.badge.plus")
                     }
+                    Button("换个仓库下载…") { showDownload = true }
+                        .controlSize(.small)
                     Spacer()
                 }
             } else {

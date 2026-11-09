@@ -9,7 +9,7 @@ struct DownloadSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("从 Hugging Face 下载模型")
+            Text("下载模型")
                 .font(.title3.bold())
             Text("支持公开仓库，文件会下载到 ~/Library/Application Support/LingoLens/models/，支持断点续传。关闭这个面板不会中断下载。")
                 .font(.callout)

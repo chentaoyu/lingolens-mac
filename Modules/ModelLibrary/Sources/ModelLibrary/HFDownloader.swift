@@ -1,6 +1,24 @@
 import Foundation
 
-/// 从 Hugging Face 直接下载模型文件到应用模型目录，支持断点续传、进度与取消。
+/// 模型文件的下载来源（与 ModelRecord.source「模型从哪来」是两回事）。
+///
+/// 默认 `automatic`：先走魔搭（国内可达，实测 10 MB/s），失败再回退 Hugging Face。
+/// 实测 Hugging Face 在国内经常直接超时，所以不能把它当首选。
+public enum ModelDownloadSource: String, Codable, Sendable, CaseIterable {
+    case automatic
+    case modelScope
+    case huggingFace
+
+    public var displayName: String {
+        switch self {
+        case .automatic: return "自动（魔搭优先）"
+        case .modelScope: return "魔搭 ModelScope"
+        case .huggingFace: return "Hugging Face"
+        }
+    }
+}
+
+/// 从模型仓库下载文件到应用模型目录，支持断点续传、进度与取消。
 public actor HFDownloader {
     private struct ModelAPIResponse: Decodable {
         struct Sibling: Decodable {
@@ -9,8 +27,25 @@ public actor HFDownloader {
         let siblings: [Sibling]?
     }
 
+    /// 魔搭的文件列表响应。
+    private struct ModelScopeResponse: Decodable {
+        struct DataBlock: Decodable {
+            struct File: Decodable {
+                let path: String
+                enum CodingKeys: String, CodingKey { case path = "Path" }
+            }
+            let files: [File]
+            enum CodingKeys: String, CodingKey { case files = "Files" }
+        }
+        let data: DataBlock
+        enum CodingKeys: String, CodingKey { case data = "Data" }
+    }
+
     private let modelsDirectory: URL
     private let session: URLSession
+
+    /// 首启自动下载用的推荐模型（魔搭与 Hugging Face 同名同内容）。
+    public static let recommendedRepositoryID = "mlx-community/Qwen3.5-4B-MLX-4bit"
 
     public init(modelsDirectory: URL, session: URLSession = .shared) {
         self.modelsDirectory = modelsDirectory
@@ -24,20 +59,35 @@ public actor HFDownloader {
     @discardableResult
     public func download(
         repoID: String,
+        source: ModelDownloadSource = .automatic,
         progress: @escaping @Sendable (DownloadProgress) -> Void = { _ in }
     ) async throws -> URL {
         let trimmed = repoID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard Self.isValidRepositoryID(trimmed) else {
             throw ModelLibraryError.invalidRepository(repoID)
         }
-        return try await performDownload(repoID: trimmed, progress: progress)
+
+        // automatic：先用魔搭列出文件，拿不到再回退 Hugging Face。
+        switch source {
+        case .modelScope:
+            return try await performDownload(repoID: trimmed, source: .modelScope, progress: progress)
+        case .huggingFace:
+            return try await performDownload(repoID: trimmed, source: .huggingFace, progress: progress)
+        case .automatic:
+            do {
+                return try await performDownload(repoID: trimmed, source: .modelScope, progress: progress)
+            } catch {
+                return try await performDownload(repoID: trimmed, source: .huggingFace, progress: progress)
+            }
+        }
     }
 
     private func performDownload(
         repoID: String,
+        source: ModelDownloadSource,
         progress: @escaping @Sendable (DownloadProgress) -> Void
     ) async throws -> URL {
-        let files = try await listFiles(repoID: repoID)
+        let files = try await listFiles(repoID: repoID, source: source)
         guard !files.isEmpty else {
             throw ModelLibraryError.listingFailed("仓库中没有可下载的文件")
         }
@@ -62,6 +112,7 @@ public actor HFDownloader {
             }
             try await downloadFile(
                 repoID: repoID,
+                source: source,
                 file: file,
                 destination: destination,
                 fileIndex: index,
@@ -72,12 +123,11 @@ public actor HFDownloader {
         return destinationRoot
     }
 
-    private func listFiles(repoID: String) async throws -> [String] {
-        guard var components = URLComponents(string: "https://huggingface.co") else {
-            throw ModelLibraryError.invalidRepository(repoID)
-        }
-        components.path = "/api/models/" + Self.encodedPath(repoID)
-        guard let url = components.url else {
+    private func listFiles(repoID: String, source: ModelDownloadSource) async throws -> [String] {
+        let urlString = source == .modelScope
+            ? "https://www.modelscope.cn/api/v1/models/" + Self.encodedPath(repoID) + "/repo/files"
+            : "https://huggingface.co/api/models/" + Self.encodedPath(repoID)
+        guard let url = URL(string: urlString) else {
             throw ModelLibraryError.invalidRepository(repoID)
         }
         var request = URLRequest(url: url)
@@ -88,17 +138,31 @@ public actor HFDownloader {
             let code = (response as? HTTPURLResponse)?.statusCode ?? -1
             throw ModelLibraryError.listingFailed("HTTP \(code)")
         }
-        guard let payload = try? JSONDecoder().decode(ModelAPIResponse.self, from: data) else {
-            throw ModelLibraryError.listingFailed("无法解析仓库信息")
+
+        let names: [String]
+        if source == .modelScope {
+            guard let payload = try? JSONDecoder().decode(ModelScopeResponse.self, from: data) else {
+                throw ModelLibraryError.listingFailed("无法解析魔搭仓库信息")
+            }
+            names = payload.data.files.map(\.path)
+        } else {
+            guard let payload = try? JSONDecoder().decode(ModelAPIResponse.self, from: data) else {
+                throw ModelLibraryError.listingFailed("无法解析仓库信息")
+            }
+            names = (payload.siblings ?? []).map(\.rfilename)
         }
-        let names = (payload.siblings ?? [])
-            .map(\.rfilename)
-            .filter { !$0.isEmpty && !$0.hasSuffix(".gitattributes") && !$0.contains("..") }
-        return names
+
+        return names.filter {
+            !$0.isEmpty
+                && !$0.hasSuffix(".gitattributes")
+                && !$0.contains("..")
+                && !$0.hasSuffix("README.md")
+        }
     }
 
     private func downloadFile(
         repoID: String,
+        source: ModelDownloadSource,
         file: String,
         destination: URL,
         fileIndex: Int,
@@ -109,12 +173,13 @@ public actor HFDownloader {
         let partial = destination.appendingPathExtension("part")
         var offset = Int64(ModelInspector.fileSize(partial))
 
-        guard var components = URLComponents(string: "https://huggingface.co") else {
-            throw ModelLibraryError.downloadFailed(file: file, status: 0)
-        }
-        components.path = "/" + Self.encodedPath(repoID) + "/resolve/main/" + Self.encodedPath(file)
-        components.queryItems = [URLQueryItem(name: "download", value: "true")]
-        guard let url = components.url else {
+        // 魔搭用 /resolve/master/，Hugging Face 用 /resolve/main/。
+        let urlString = source == .modelScope
+            ? "https://www.modelscope.cn/models/" + Self.encodedPath(repoID)
+                + "/resolve/master/" + Self.encodedPath(file)
+            : "https://huggingface.co/" + Self.encodedPath(repoID)
+                + "/resolve/main/" + Self.encodedPath(file) + "?download=true"
+        guard let url = URL(string: urlString) else {
             throw ModelLibraryError.downloadFailed(file: file, status: 0)
         }
 

@@ -152,6 +152,23 @@
   （不再依赖 `didFinishUpdateCycleFor`，那条路径实测只触发一次）；候选耗尽才提示失败。
 - 过程写 `~/Library/Logs/LingoLens/app.log`，菜单栏应用看不到 stdout，之前只能靠猜。
 
+### 3.8 首启自动下载模型（0.1.9）
+
+之前用户要自己「模型页 → 从 Hugging Face 下载 → 输入仓库名 → 等 → 设为常驻模型」，
+而且 `HFDownloader` 把 `huggingface.co` 写死——国内实测直连直接超时，这条路根本走不通。
+
+- **下载源**：新增 `ModelDownloadSource`：`automatic` 默认先走魔搭
+  （`https://www.modelscope.cn/api/v1/models/{repo}/repo/files` 列文件、
+  `/models/{repo}/resolve/master/{file}` 下载），失败再回退 Hugging Face。
+  实测魔搭 LFS 文件 3.6–5.7 MB/s，Hugging Face 直连超时。
+- 注意 `ModelSource`（模型从哪来：扫描/导入/下载）与 `ModelDownloadSource`
+  （文件从哪个站下）是两件事，不要混用。
+- **自动开始**：引导走到「选择模型」且本机没有可用模型时，自动把
+  `HFDownloader.recommendedRepositoryID`（`mlx-community/Qwen3.5-4B-MLX-4bit`）
+  交给 `ModelDownloadState` 下载，进度直接复用模型页的下载卡片；用户可随时取消或改为导入。
+- **自动常驻**：`downloadModel` 完成后调用 `applyDefaultResidentModelIfNeeded()`，
+  下载结束即设为常驻模型，不用再点一次。
+
 ### 3.4 设置
 
 - `~/Library/Application Support/LingoLens/settings.json`，300ms 防抖落盘。
