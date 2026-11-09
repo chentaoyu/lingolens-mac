@@ -4,15 +4,15 @@ import SelectionTranslate
 import SwiftUI
 
 struct PermissionsSettingsView: View {
-    @State private var accessibilityTrusted = AccessibilityPermission.isTrusted
+    @State private var accessibilityState: AccessibilityTrustState = .granted
     @State private var microphoneStatus = AVCaptureDevice.authorizationStatus(for: .audio)
 
     var body: some View {
         Group {
             permissionRow(
                 title: "辅助功能",
-                detail: "读取其他应用中选中的文本。未授权时退化为模拟 ⌘C，仍失败则打开空浮窗手动输入。",
-                granted: accessibilityTrusted,
+                detail: accessibilityDetail,
+                granted: accessibilityState.isUsable,
                 requestTitle: "请求授权",
                 request: {
                     AccessibilityPermission.request()
@@ -22,6 +22,19 @@ struct PermissionsSettingsView: View {
                     open("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
                 }
             )
+            if accessibilityState == .needsRestart {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.clockwise.circle.fill")
+                        .foregroundStyle(Color.warning)
+                    Text("系统里已经授权，但本次运行还读不到。macOS 把授权结果缓存在进程里，重启一次即可生效。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("重启 LingoLens") { AccessibilityPermission.relaunch() }
+                        .controlSize(.small)
+                }
+            }
 
             permissionRow(
                 title: "麦克风",
@@ -96,9 +109,24 @@ struct PermissionsSettingsView: View {
         }
     }
 
+    private var accessibilityDetail: String {
+        switch accessibilityState {
+        case .granted:
+            return "读取其他应用中选中的文本。"
+        case .needsRestart:
+            return "系统设置里已勾选，但当前进程还没生效，需要重启应用。"
+        case .denied:
+            return "读取其他应用中选中的文本。未授权时退化为模拟 ⌘C，仍失败则打开空浮窗手动输入。"
+        }
+    }
+
     private func refresh() {
-        accessibilityTrusted = AccessibilityPermission.isTrusted
         microphoneStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        // 判定可能要起子进程复查，别让它卡住设置界面。
+        Task.detached(priority: .utility) {
+            let state = AccessibilityPermission.resolvedState()
+            await MainActor.run { accessibilityState = state }
+        }
     }
 
     private func open(_ urlString: String) {

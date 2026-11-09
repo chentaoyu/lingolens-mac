@@ -10,7 +10,7 @@ import Transcriber
 struct HomeView: View {
     @EnvironmentObject private var environment: AppEnvironment
     @State private var recentMeetings: [MeetingSummary] = []
-    @State private var accessibilityTrusted = AccessibilityPermission.isTrusted
+    @State private var accessibilityState: AccessibilityTrustState = .granted
     @State private var speechLocaleCount = 0
 
     var body: some View {
@@ -31,8 +31,9 @@ struct HomeView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             // 用户去系统设置授权后回到应用，横幅随之更新。
-            accessibilityTrusted = AccessibilityPermission.isTrusted
+            refreshAccessibility()
         }
+        .task { refreshAccessibility() }
         .task(id: environment.meetingsRevision) {
             recentMeetings = Array(await environment.loadMeetings().prefix(3))
         }
@@ -54,6 +55,14 @@ struct HomeView: View {
             Spacer()
             SessionButton()
                 .controlSize(.large)
+        }
+    }
+
+    /// 授权判定可能要起子进程复查，放到后台，避免卡住界面。
+    private func refreshAccessibility() {
+        Task.detached(priority: .utility) {
+            let state = AccessibilityPermission.resolvedState()
+            await MainActor.run { accessibilityState = state }
         }
     }
 
@@ -99,7 +108,16 @@ struct HomeView: View {
                     .buttonStyle(.borderedProminent)
             }
         }
-        if !accessibilityTrusted {
+        if accessibilityState == .needsRestart {
+            IssueBanner(
+                title: "辅助功能已授权，需要重启生效",
+                message: "macOS 会把授权结果缓存在进程里，勾选后当前这次运行读不到，重启一次即可。",
+                tint: Color.warning
+            ) {
+                Button("重启 LingoLens") { AccessibilityPermission.relaunch() }
+                    .buttonStyle(.borderedProminent)
+            }
+        } else if accessibilityState == .denied {
             IssueBanner(
                 title: "未授予辅助功能权限",
                 message: "划词翻译会退化为模拟 ⌘C 读取选中文字，部分应用可能取不到。",

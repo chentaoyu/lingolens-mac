@@ -22,41 +22,11 @@ public protocol SelectedTextProviding {
     func readSelectedText() async -> SelectionResult?
 }
 
-public enum AccessibilityPermission {
-    public static var isTrusted: Bool {
-        AXIsProcessTrusted()
-    }
+// 授权状态的判定与重启逻辑见 AccessibilityPermission.swift。
 
-    /// 弹出系统授权提示（只会出现一次，之后需到系统设置里手动开启）。
-    public static func request() {
-        // kAXTrustedCheckOptionPrompt 是全局 var，Swift 6 下不可直接读取；使用其字符串值。
-        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(options)
-    }
-
-    public static func openSystemSettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else {
-            return
-        }
-        NSWorkspace.shared.open(url)
-    }
-}
-
-/// 先读 Accessibility 的选中文本，失败时用剪贴板兜底。
-public struct SystemSelectionReader: SelectedTextProviding {
-    public init() {}
-
-    public func readSelectedText() async -> SelectionResult? {
-        if let text = Self.accessibilitySelectedText(), !text.isEmpty {
-            return SelectionResult(text: text, source: .accessibility)
-        }
-        if let text = await Self.clipboardSelectedText(), !text.isEmpty {
-            return SelectionResult(text: text, source: .clipboard)
-        }
-        return nil
-    }
-
-    public static func accessibilitySelectedText() -> String? {
+/// 读取当前焦点元素的选中文本。
+public enum AccessibilitySelection {
+    public static func selectedText() -> String? {
         guard let application = NSWorkspace.shared.frontmostApplication else { return nil }
         let applicationElement = AXUIElementCreateApplication(application.processIdentifier)
 

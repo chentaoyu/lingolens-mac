@@ -118,6 +118,19 @@
 - **取舍**：Whisper 按句出字幕，没有实时草稿；峰值内存约 0.73 GB。
   未选 Whisper 或模型没下好时自动回退系统识别，不会没有字幕。
 
+### 3.6 辅助功能授权（macOS TCC）
+
+- 判定用 `AXIsProcessTrusted()`，但 macOS 会把结果**缓存在进程里**：用户在系统设置里勾选之后，
+  已经在运行的进程仍然读到 false，必须重启一次。之前文案写「授权后无需重启」是错的，
+  这正是「明明开了却一直提示未授权」的根因。
+- 为了区分「真的没授权」和「授权了但本进程没生效」，`AccessibilityPermission.resolvedState()`
+  起一个**子进程**跑同一个二进制（`--accessibility-trust-check`）读判定：同一 app 身份、
+  全新进程，不受缓存影响。三种结果对应三种 UI：已授权 / 未授权（去授权）/ 需要重启（重启按钮）。
+- 这个命令行开关放在 `@main` 的最前面（`LingoLensMain.main()`），早于 SwiftUI 初始化，
+  打印一行就 exit；放到 `applicationWillFinishLaunching` 不可靠。
+- 实测：同一 bundle id 的两个不同构建（不同 cdhash）在全新进程里都读到 true，
+  说明授权是按 bundle id 记的、能跨版本保留；所以升级不会丢掉授权。
+
 ### 3.4 设置
 
 - `~/Library/Application Support/LingoLens/settings.json`，300ms 防抖落盘。
