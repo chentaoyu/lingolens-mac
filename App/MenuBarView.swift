@@ -1,6 +1,7 @@
 import AppKit
 import AudioCapture
 import LiveSubtitle
+import ModelRuntime
 import SelectionTranslate
 import Settings
 import SwiftUI
@@ -175,6 +176,10 @@ private struct SessionCard: View {
                     .labelsHidden()
                 }
                 GridRow {
+                    label("识别引擎")
+                    enginePicker
+                }
+                GridRow {
                     label("对方语言")
                     languagePicker(\.otherLanguage)
                 }
@@ -201,6 +206,32 @@ private struct SessionCard: View {
         .toggleStyle(.switch)
         .controlSize(.small)
         .font(.system(size: 12))
+    }
+
+    /// 识别引擎切换：和音频源、语言一样，会话开始后不可改。
+    private var enginePicker: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Picker("", selection: engineBinding) {
+                ForEach(SpeechEngine.allCases, id: \.self) { Text($0.displayName).tag($0) }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+
+            // 选了 Whisper 但模型没下好时给一句提示，否则用户不知道会退回系统识别。
+            if environment.settings.speech.engine == .whisper, !environment.speechModelInstalled {
+                Text("Whisper 模型未下载，会话会退回系统识别")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var engineBinding: Binding<SpeechEngine> {
+        Binding(
+            get: { environment.settings.speech.engine },
+            set: { value in environment.updateSpeech { $0.engine = value } }
+        )
     }
 
     @ViewBuilder

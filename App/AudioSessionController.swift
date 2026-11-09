@@ -25,8 +25,8 @@ final class AudioSessionController: ObservableObject {
     /// 两路音频的当前电平（0…1），菜单栏用来显示「有没有采到声音」。
     @Published private(set) var levels: [AudioChannel: Float] = [:]
 
-    /// 会话结束后通知界面刷新会议列表。
-    var onSessionFinished: (() -> Void)?
+    /// 会话结束后通知界面：带上刚才落盘的会议（没有记录会议时为 nil）。
+    var onSessionFinished: ((MeetingMeta?) -> Void)?
 
     private let settingsStore: SettingsStore
     private let subtitleStore: SubtitleStore
@@ -209,7 +209,7 @@ final class AudioSessionController: ObservableObject {
         startedAt = nil
         state = .idle
         statusText = "已停止"
-        onSessionFinished?()
+        onSessionFinished?(finishedMeeting)
         return finishedMeeting
     }
 
@@ -229,8 +229,16 @@ final class AudioSessionController: ObservableObject {
             language: Self.whisperLanguage(for: identifiers),
             hotwords: settings.hotwordList
         )
-        let events = try await transcriber.start()
+        // 先登记再等 ready：等待期间用户点停止时，stop() 才能把它收掉。
         whisperSessions[channel] = transcriber
+        let events: AsyncStream<WhisperSidecarEvent>
+        do {
+            events = try await transcriber.start()
+        } catch {
+            whisperSessions[channel] = nil
+            await transcriber.stop()
+            throw error
+        }
 
         eventTasks[channel] = Task { @MainActor [weak self] in
             for await event in events {

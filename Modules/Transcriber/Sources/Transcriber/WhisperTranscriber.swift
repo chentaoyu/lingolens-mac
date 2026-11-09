@@ -112,6 +112,9 @@ public actor WhisperTranscriber {
     private var converter: AudioFormatConverter?
     private var converterFormat: AVAudioFormat?
     private var stderrTail = ""
+    private var rawLineCount = 0
+    private var stdoutHandler: FileHandle?
+    private var stderrHandler: FileHandle?
 
     private static var targetFormat: AVAudioFormat? {
         AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)
@@ -175,11 +178,16 @@ public actor WhisperTranscriber {
         self.process = process
         self.stdinHandle = inputPipe.fileHandleForWriting
 
-        let stdout = outputPipe.fileHandleForReading
-        let stderr = errorPipe.fileHandleForReading
-        readerTask = Task.detached { [weak self] in
-            await self?.readLoop(stdout: stdout, stderr: stderr)
-        }
+        rawLineCount = 0
+        stderrTail = ""
+        attachReaders(
+            stdout: outputPipe.fileHandleForReading,
+            stderr: errorPipe.fileHandleForReading
+        )
+
+        TranscriptionLog.write(
+            "[whisper] 已启动进程 pid=\(process.processIdentifier) model=\(modelDirectory.lastPathComponent)"
+        )
 
         // 模型加载 1–2 秒，给足超时；超时说明进程起不来。
         try await withThrowingTaskGroup(of: Void.self) { group in
@@ -226,6 +234,10 @@ public actor WhisperTranscriber {
     }
 
     public func stop() async {
+        stdoutHandler?.readabilityHandler = nil
+        stderrHandler?.readabilityHandler = nil
+        stdoutHandler = nil
+        stderrHandler = nil
         readerTask?.cancel()
         readerTask = nil
         if let process, process.isRunning {
@@ -272,43 +284,66 @@ public actor WhisperTranscriber {
     }
 
     private func awaitReady() async throws {
+        TranscriptionLog.write("[whisper] 等待 ready didSignalReady=\(didSignalReady)")
         if didSignalReady { return }
         try await withCheckedThrowingContinuation { continuation in
             readyContinuation = continuation
         }
+        TranscriptionLog.write("[whisper] ready 等待结束")
     }
 
-    private func readLoop(stdout: FileHandle, stderr: FileHandle) async {
-        let stderrTask = Task.detached { [weak self] in
-            var tail = ""
-            do {
-                for try await line in stderr.bytes.lines {
-                    tail += line + "\n"
-                    if tail.count > 4000 { tail = String(tail.suffix(4000)) }
-                }
-            } catch {}
-            await self?.recordStderr(tail)
+    /// 用 readabilityHandler 读管道，而不是 FileHandle.bytes。
+    ///
+    /// 实测同一个 App 里开第二条管道时，bytes 的异步序列收不到数据：
+    /// 子进程明明已经打印了 ready（RSS 690MB，模型已加载），App 却一直等，
+    /// 直到进程被杀、管道 EOF 才一次性拿到。readabilityHandler 由内核可读事件驱动，
+    /// 多条管道互不影响（ProcessCommandRunner 早就用的这套）。
+    private func attachReaders(stdout: FileHandle, stderr: FileHandle) {
+        let outLines = LineSplitter { [weak self] line in
+            Task { await self?.handleStdoutLine(line) }
         }
-
-        do {
-            for try await line in stdout.bytes.lines {
-                guard let event = WhisperEventParser.parse(line) else { continue }
-                offer(event)
+        let errLines = LineSplitter { [weak self] line in
+            Task { await self?.appendStderr(line) }
+        }
+        stdout.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else {
+                handle.readabilityHandler = nil
+                return
             }
-        } catch {
-            offer(.failure("读取转写输出失败：" + error.localizedDescription))
+            outLines.consume(data)
         }
-        // 输出关闭说明进程结束，把等待中的 ready 放掉，避免卡死。
-        signalReady(.failure(WhisperTranscriberError.notReady))
-        _ = await stderrTask.result
+        stderr.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else {
+                handle.readabilityHandler = nil
+                return
+            }
+            errLines.consume(data)
+        }
+        stdoutHandler = stdout
+        stderrHandler = stderr
     }
 
-    private func recordStderr(_ tail: String) {
-        stderrTail = tail
+    private func handleStdoutLine(_ line: String) {
+        if rawLineCount < 3 {
+            rawLineCount += 1
+            TranscriptionLog.write("[whisper-raw] 第\(rawLineCount)行: \(line.prefix(60))")
+        }
+        guard let event = WhisperEventParser.parse(line) else { return }
+        offer(event)
+    }
+
+    private func appendStderr(_ line: String) {
+        stderrTail += line + "\n"
+        if stderrTail.count > 4000 {
+            stderrTail = String(stderrTail.suffix(4000))
+        }
     }
 
     private func offer(_ event: WhisperSidecarEvent) {
         if case .ready = event {
+            TranscriptionLog.write("[whisper] 收到 ready")
             signalReady(.success(()))
             return
         }

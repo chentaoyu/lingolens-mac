@@ -163,9 +163,23 @@ final class AppEnvironment: ObservableObject {
             }
             .store(in: &cancellables)
 
-        audioSession.onSessionFinished = { [weak self] in
-            self?.meetingsRevision += 1
-            self?.hasUnseenMeetings = true
+        audioSession.onSessionFinished = { [weak self] meeting in
+            guard let self else { return }
+            self.meetingsRevision += 1
+
+            // 会话结束：字幕浮窗没有意义了，直接收掉。
+            self.subtitlePanel.hide()
+
+            guard let meeting else {
+                // 没记录会议就只刷新列表，别把用户从当前页面拽走。
+                self.hasUnseenMeetings = true
+                return
+            }
+            // 记录了会议：直接打开这场会议的详情页。
+            self.hasUnseenMeetings = false
+            self.mainTab = .meetings
+            self.focusMeetingID = meeting.id
+            MainWindowController.shared.show()
         }
 
         observeRuntimeProgress()
