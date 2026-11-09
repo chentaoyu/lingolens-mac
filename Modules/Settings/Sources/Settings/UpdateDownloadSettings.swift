@@ -37,21 +37,23 @@ public struct UpdateDownloadSettings: Codable, Sendable, Equatable {
         customURLTemplate = (try? container.decodeIfPresent(String.self, forKey: .customURLTemplate)) ?? ""
     }
 
-    /// 内置的 GitHub 加速前缀。第三方服务，随时可能失效，所以只作为可选/兜底。
+    /// 内置的 GitHub 加速前缀。
+    ///
+    /// 第三方服务随时可能失效，顺序只表示「默认尝试次序」，实际会按测速结果重排；
+    /// 出现失效时把可用的那个往前挪即可。
     public static let builtinMirrorPrefixes = [
-        "https://gh-proxy.com/",
-        "https://ghfast.top/"
+        "https://ghfast.top/",
+        "https://gh-proxy.com/"
     ]
 }
 
-/// 把 appcast 里的官方下载地址展开成候选列表，并按测速结果挑选。
+/// 把 appcast 里的官方下载地址展开成候选列表。
+///
+/// 刻意**不做测速择优**：实测 GitHub 直连与部分镜像都是「小请求几百 KB/s、
+/// 整包下载 504 gateway timeout」，用分块采样测速会稳定地选中那个下不完的源。
+/// 因此按固定顺序依次尝试、失败换下一个，比任何测速都可靠。
 public enum UpdateDownloadResolver {
-    /// 低于这个速度视为不可用。
-    public static let minimumBytesPerSecond: Double = 30 * 1024
-    /// 镜像要比官方快这么多倍才值得切换，避免为了 10% 的提速走第三方。
-    public static let mirrorAdvantage: Double = 1.5
-
-    /// 候选地址（按偏好排序，第一个是默认值）。
+    /// 候选地址（按尝试顺序排列，第一个是默认值）。
     public static func candidates(official: URL, settings: UpdateDownloadSettings) -> [URL] {
         var urls: [URL] = []
 
@@ -65,9 +67,11 @@ public enum UpdateDownloadResolver {
                 urls = [official]
             }
         case .automatic:
-            urls = [official] + UpdateDownloadSettings.builtinMirrorPrefixes.compactMap {
+            // 镜像排在官方之前：GitHub 直连常常「小请求能通、整包下载 504」，
+            // 探测阶段判断不准，所以让官方做兜底而不是首选。
+            urls = UpdateDownloadSettings.builtinMirrorPrefixes.compactMap {
                 customURL(official: official, template: $0 + "{url}")
-            }
+            } + [official]
         }
 
         var unique: [URL] = []
@@ -98,25 +102,4 @@ public enum UpdateDownloadResolver {
         return url
     }
 
-    /// 在候选里挑一个：优先官方，镜像必须明显更快才切换；都不达标时用第一个候选。
-    public static func choose(
-        candidates: [URL],
-        measuredBytesPerSecond: [URL: Double],
-        official: URL
-    ) -> URL {
-        let usable = candidates.filter { (measuredBytesPerSecond[$0] ?? 0) >= minimumBytesPerSecond }
-        guard let best = usable.max(by: {
-            (measuredBytesPerSecond[$0] ?? 0) < (measuredBytesPerSecond[$1] ?? 0)
-        }) else {
-            return candidates.first ?? official
-        }
-
-        let officialSpeed = measuredBytesPerSecond[official] ?? 0
-        if best.absoluteString != official.absoluteString,
-           officialSpeed >= minimumBytesPerSecond,
-           (measuredBytesPerSecond[best] ?? 0) < officialSpeed * mirrorAdvantage {
-            return official
-        }
-        return best
-    }
 }

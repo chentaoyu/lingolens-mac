@@ -131,6 +131,27 @@
 - 实测：同一 bundle id 的两个不同构建（不同 cdhash）在全新进程里都读到 true，
   说明授权是按 bundle id 记的、能跨版本保留；所以升级不会丢掉授权。
 
+### 3.7 更新包下载（0.1.7 修正）
+
+日志证据（2026-11-09 13:36–13:37）：
+
+    github 直连         full 24MB → 504 gateway timeout（2MB Range 却有 191 KB/s）
+    gh-proxy.com        full 24MB → 504（2MB Range 176 KB/s）
+    ghfast.top          full 24MB → 200，1.6–5.7 MB/s，sha256 与本地一致
+
+结论：**分块测速无法预测「能不能下完」**。0.1.4 引入的测速择优会稳定选中
+「小请求很快、整包必超时」的官方直连，反而必然失败；0.1.6 的换源又只推进一次，
+没走到真正可用的 ghfast.top。
+
+0.1.7 的做法：
+
+- 删掉测速择优（`UpdateDownloadResolver.choose` 与 `UpdateSourceProbe` 一并删除）。
+  测速带来的错误决策比它解决的问题多。
+- 候选顺序改为 **镜像优先、官方兜底**：`automatic` = [ghfast.top, gh-proxy.com, 官方]。
+- 换源改为**穷尽式**：`failedToDownloadUpdate` 里直接推进到下一个未尝试的候选并重试
+  （不再依赖 `didFinishUpdateCycleFor`，那条路径实测只触发一次）；候选耗尽才提示失败。
+- 过程写 `~/Library/Logs/LingoLens/app.log`，菜单栏应用看不到 stdout，之前只能靠猜。
+
 ### 3.4 设置
 
 - `~/Library/Application Support/LingoLens/settings.json`，300ms 防抖落盘。

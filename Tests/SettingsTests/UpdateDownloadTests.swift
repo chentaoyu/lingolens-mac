@@ -15,15 +15,17 @@ struct UpdateDownloadResolverTests {
         #expect(urls == [official])
     }
 
-    @Test("自动模式：官方优先，内置镜像作为备选")
+    @Test("自动模式：内置镜像优先，官方兜底")
     func automaticCandidates() {
         let urls = UpdateDownloadResolver.candidates(
             official: official,
             settings: UpdateDownloadSettings(source: .automatic)
         )
-        #expect(urls.first == official)
         #expect(urls.count == 1 + UpdateDownloadSettings.builtinMirrorPrefixes.count)
-        #expect(urls[1].absoluteString == "https://gh-proxy.com/" + official.absoluteString)
+        // GitHub 直连常常「小请求能通、整包下载超时」，所以让它排最后。
+        #expect(urls.last == official)
+        #expect(urls[0].absoluteString == UpdateDownloadSettings.builtinMirrorPrefixes[0] + official.absoluteString)
+        #expect(urls[1].absoluteString == UpdateDownloadSettings.builtinMirrorPrefixes[1] + official.absoluteString)
     }
 
     @Test("自定义镜像模板使用 {url} 占位符")
@@ -54,48 +56,22 @@ struct UpdateDownloadResolverTests {
         #expect(urls == [official])
     }
 
-    @Test("官方源最快时保持官方")
-    func prefersOfficial() {
-        let mirror = URL(string: "https://gh-proxy.com/" + official.absoluteString)!
-        let chosen = UpdateDownloadResolver.choose(
-            candidates: [official, mirror],
-            measuredBytesPerSecond: [official: 200_000, mirror: 260_000],
-            official: official
+    @Test("失败换源时按候选顺序推进，不会跳过中间源")
+    func failoverFollowsOrder() {
+        let urls = UpdateDownloadResolver.candidates(
+            official: official,
+            settings: UpdateDownloadSettings(source: .automatic)
         )
-        #expect(chosen == official)
-    }
-
-    @Test("官方不可用时切到镜像")
-    func fallsBackToMirror() {
-        let mirror = URL(string: "https://gh-proxy.com/" + official.absoluteString)!
-        let chosen = UpdateDownloadResolver.choose(
-            candidates: [official, mirror],
-            measuredBytesPerSecond: [mirror: 200_000],
-            official: official
-        )
-        #expect(chosen == mirror)
-    }
-
-    @Test("镜像明显更快时切换")
-    func usesFasterMirror() {
-        let mirror = URL(string: "https://gh-proxy.com/" + official.absoluteString)!
-        let chosen = UpdateDownloadResolver.choose(
-            candidates: [official, mirror],
-            measuredBytesPerSecond: [official: 100_000, mirror: 400_000],
-            official: official
-        )
-        #expect(chosen == mirror)
-    }
-
-    @Test("全部不可用时用第一个候选")
-    func fallsBackToFirst() {
-        let mirror = URL(string: "https://gh-proxy.com/" + official.absoluteString)!
-        let chosen = UpdateDownloadResolver.choose(
-            candidates: [official, mirror],
-            measuredBytesPerSecond: [:],
-            official: official
-        )
-        #expect(chosen == official)
+        // 模拟「已试过前两个」后应轮到第三个，最终一定会走到官方兜底。
+        var attempted: Set<String> = []
+        var sequence: [URL] = []
+        for _ in urls.indices {
+            guard let next = urls.first(where: { !attempted.contains($0.absoluteString) }) else { break }
+            attempted.insert(next.absoluteString)
+            sequence.append(next)
+        }
+        #expect(sequence == urls)
+        #expect(sequence.last == official)
     }
 
     @Test("设置解码兼容缺失字段")

@@ -20,11 +20,10 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
 
     private var controller: SPUStandardUpdaterController?
     private var candidates: [URL] = []
-    private var speeds: [URL: Double] = [:]
     private var attempted: Set<String> = []
     private var forcedURL: URL?
-    private var probeTask: Task<Void, Never>?
     private var downloadFailed = false
+    private var retryTask: Task<Void, Never>?
 
     private override init() {
         super.init()
@@ -62,20 +61,9 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
         guard urls != candidates else { return }
 
         candidates = urls
-        speeds = [:]
         attempted = []
         forcedURL = nil
-        probeTask?.cancel()
-
-        guard urls.count > 1 else {
-            probeTask = nil
-            return
-        }
-        probeTask = Task { [weak self] in
-            let measured = await UpdateSourceProbe.measure(urls)
-            guard !Task.isCancelled else { return }
-            self?.speeds = measured
-        }
+        AppLog.write("[update] 候选下载源：\(urls.map { $0.host ?? "?" })")
     }
 
     // MARK: - SPUUpdaterDelegate
@@ -95,55 +83,83 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
         if candidates.isEmpty {
             refreshCandidates(official: official)
         }
-        let target = forcedURL ?? UpdateDownloadResolver.choose(
-            candidates: candidates,
-            measuredBytesPerSecond: speeds,
-            official: official
-        )
+        // 按候选顺序依次尝试：第一个就是镜像，官方排最后兜底。
+        let target = forcedURL
+            ?? candidates.first(where: { !attempted.contains($0.absoluteString) })
+            ?? official
         forcedURL = nil
         attempted.insert(target.absoluteString)
         lastSourceHost = target.host
 
+        AppLog.write("[update] 下载源 \(target.host ?? "?")（第 \(attempted.count)/\(candidates.count) 个候选）")
         if target.absoluteString != official.absoluteString {
             request.url = target
-            print("[Updater] 改用加速源下载：\(target.absoluteString)")
         }
     }
 
     func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
+        AppLog.write("[update] 下载完成（\(lastSourceHost ?? "?")）")
         attempted = []
         downloadFailed = false
+        retryTask?.cancel()
+        retryTask = nil
     }
 
     func updater(_ updater: SPUUpdater, failedToDownloadUpdate item: SUAppcastItem, error: any Error) {
         downloadFailed = true
-        print("[Updater] 更新下载失败（\(lastSourceHost ?? "?"))：\(error.localizedDescription)")
+        AppLog.write(
+            "[update] 下载失败（\(lastSourceHost ?? "?"))：\(error.localizedDescription)"
+        )
+        // 不依赖 update cycle 结束回调：那条路径只触发一次，实测会漏掉后面的候选源。
+        scheduleRetryFromFailure()
     }
 
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
-        guard error != nil, downloadFailed else { return }
-        downloadFailed = false
+        AppLog.write("[update] cycle 结束 error=\(error.map { $0.localizedDescription } ?? "nil") 已试=\(attempted.count)/\(candidates.count)")
+        // 兜底：失败回调没被调到时，这里再推一次。
+        if error != nil, downloadFailed {
+            scheduleRetryFromFailure()
+        }
+    }
+
+    // MARK: - 换源重试
+
+    /// 换到下一个还没试过的源并重新发起检查；候选用尽就停下并提示。
+    private func scheduleRetryFromFailure() {
+        guard retryTask == nil else { return }
         guard let next = candidates.first(where: { !attempted.contains($0.absoluteString) }) else {
+            downloadFailed = false
+            AppLog.write("[update] 所有候选源都失败了：\(candidates.map { $0.host ?? "?" })")
+            AppEnvironment.shared.showToast(
+                AppToast(
+                    title: "更新下载失败",
+                    subtitle: "已尝试全部下载源。可在「设置 → 通用 → 更新」换自定义地址，或到发布页手动下载。",
+                    systemImage: "exclamationmark.triangle.fill"
+                ),
+                autoDismissAfter: 10
+            )
             return
         }
 
+        downloadFailed = false
         forcedURL = next
+        AppLog.write("[update] 换源重试：\(next.host ?? "?")")
         AppEnvironment.shared.showToast(
             AppToast(
                 title: "更新下载失败，正在换源重试",
-                subtitle: "改用 \(next.host ?? "其他源")；如果仍然失败，可在 设置 → 通用 → 更新 里换下载源",
+                subtitle: "改用 \(next.host ?? "其他源")",
                 systemImage: "arrow.triangle.2.circlepath"
             ),
             autoDismissAfter: 8
         )
 
-        let inBackground = updateCheck == .updatesInBackground
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+        retryTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
             guard let self, let controller = self.controller else { return }
-            if inBackground {
+            await MainActor.run {
+                self.retryTask = nil
                 controller.updater.checkForUpdatesInBackground()
-            } else {
-                self.checkForUpdates()
             }
         }
     }
