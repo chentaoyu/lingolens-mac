@@ -407,7 +407,7 @@ struct AppSettingsView: View {
     private var whisperStatusRow: some View {
         if let progress = environment.speechModelProgress {
             VStack(alignment: .leading, spacing: 4) {
-                Text("下载 (progress.currentFile) · (Int(progress.fraction * 100))%")
+                Text("下载 \(progress.currentFile) · \(Int(progress.fraction * 100))%")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 ProgressView(value: progress.fraction)
