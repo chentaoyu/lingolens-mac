@@ -65,11 +65,28 @@ final class ModelDownloadState: ObservableObject {
                 self.phase = .finished(record.name)
                 self.bytesPerSecond = nil
                 self.progress = nil
+                // 下载常在后台进行（引导已关、窗口不在前台），用 toast 给一个跨界面的完成信号。
+                environment.showToast(
+                    AppToast(
+                        title: "模型下载完成",
+                        subtitle: "\(record.name) 已就绪，可以开始翻译了",
+                        systemImage: "checkmark.circle.fill"
+                    ),
+                    autoDismissAfter: 8
+                )
             } catch is CancellationError {
                 // 暂停与取消由 pause()/cancel() 决定最终状态，这里不覆盖。
             } catch {
                 self.phase = .failed(error.localizedDescription)
                 self.bytesPerSecond = nil
+                environment.showToast(
+                    AppToast(
+                        title: "模型下载失败",
+                        subtitle: error.localizedDescription,
+                        systemImage: "exclamationmark.triangle.fill"
+                    ),
+                    autoDismissAfter: 10
+                )
             }
         }
     }

@@ -163,11 +163,13 @@
   实测魔搭 LFS 文件 3.6–5.7 MB/s，Hugging Face 直连超时。
 - 注意 `ModelSource`（模型从哪来：扫描/导入/下载）与 `ModelDownloadSource`
   （文件从哪个站下）是两件事，不要混用。
-- **自动开始**：引导走到「选择模型」且本机没有可用模型时，自动把
-  `HFDownloader.recommendedRepositoryID`（`mlx-community/Qwen3.5-4B-MLX-4bit`）
-  交给 `ModelDownloadState` 下载，进度直接复用模型页的下载卡片；用户可随时取消或改为导入。
+- **一键下载**：引导走到「选择模型」且本机没有可用模型时，给一个「下载 Qwen3.5-4B」按钮，
+  点击即用 `HFDownloader.recommendedRepositoryID`（`mlx-community/Qwen3.5-4B-MLX-4bit`）
+  开始下载，不需要输入仓库名。
+- **后台进行**：下载任务挂在 `AppEnvironment` 的 `ModelDownloadState` 上，关掉引导、切到别的页面
+  都继续下；「继续」按钮在下载中放行，不再卡在这 3 GB 上。
 - **自动常驻**：`downloadModel` 完成后调用 `applyDefaultResidentModelIfNeeded()`，
-  下载结束即设为常驻模型，不用再点一次。
+  下载结束即设为常驻模型；完成/失败都会弹 toast，因为那时界面往往不在前台。
 
 ### 3.4 设置
 
