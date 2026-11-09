@@ -32,7 +32,12 @@ public actor HFDownloader {
         struct DataBlock: Decodable {
             struct File: Decodable {
                 let path: String
-                enum CodingKeys: String, CodingKey { case path = "Path" }
+                /// 魔搭用 Type 区分目录（tree）与文件（blob）；目录不能当文件去下载。
+                let type: String?
+                enum CodingKeys: String, CodingKey {
+                    case path = "Path"
+                    case type = "Type"
+                }
             }
             let files: [File]
             enum CodingKeys: String, CodingKey { case files = "Files" }
@@ -144,7 +149,11 @@ public actor HFDownloader {
             guard let payload = try? JSONDecoder().decode(ModelScopeResponse.self, from: data) else {
                 throw ModelLibraryError.listingFailed("无法解析魔搭仓库信息")
             }
-            names = payload.data.files.map(\.path)
+            // 魔搭的 repo/files 会连目录一起返回（Type=tree、Size=0），
+            // 目录没有可下载的 URL，当成文件去下必然 404。
+            names = payload.data.files
+                .filter { ($0.type ?? "blob") == "blob" }
+                .map(\.path)
         } else {
             guard let payload = try? JSONDecoder().decode(ModelAPIResponse.self, from: data) else {
                 throw ModelLibraryError.listingFailed("无法解析仓库信息")

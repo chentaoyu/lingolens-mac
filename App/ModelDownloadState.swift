@@ -53,6 +53,7 @@ final class ModelDownloadState: ObservableObject {
         phase = .downloading
         bytesPerSecond = nil
         lastSample = nil
+        AppLog.write("[download] 开始 \(repo)")
 
         task = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -62,6 +63,7 @@ final class ModelDownloadState: ObservableObject {
                         self.record(progress)
                     }
                 }
+                AppLog.write("[download] 完成 \(repo) -> \(record.name)")
                 self.phase = .finished(record.name)
                 self.bytesPerSecond = nil
                 self.progress = nil
@@ -77,6 +79,7 @@ final class ModelDownloadState: ObservableObject {
             } catch is CancellationError {
                 // 暂停与取消由 pause()/cancel() 决定最终状态，这里不覆盖。
             } catch {
+                AppLog.write("[download] 失败 \(repo)：\(error)")
                 self.phase = .failed(error.localizedDescription)
                 self.bytesPerSecond = nil
                 environment.showToast(
