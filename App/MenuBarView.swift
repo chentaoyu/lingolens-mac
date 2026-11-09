@@ -224,6 +224,10 @@ private struct SessionCard: View {
                     .labelsHidden()
                 }
                 GridRow {
+                    label("麦克风")
+                    microphonePicker
+                }
+                GridRow {
                     label("识别引擎")
                     enginePicker
                 }
@@ -254,6 +258,35 @@ private struct SessionCard: View {
         .toggleStyle(.switch)
         .controlSize(.small)
         .font(.system(size: 12))
+    }
+
+    /// 麦克风策略：默认跟随会议软件，别的应用不开麦就不占用麦克风。
+    private var microphonePicker: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Picker("", selection: Binding(
+                get: { environment.settings.audioSession.microphoneMode },
+                set: { value in environment.updateAudioSession { $0.microphoneMode = value } }
+            )) {
+                ForEach(MicrophoneMode.allCases, id: \.self) { Text($0.displayName).tag($0) }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+
+            if environment.settings.audioSession.microphoneMode == .follow {
+                Text(followStatusText)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var followStatusText: String {
+        let monitor = session.microphoneMonitor
+        if !monitor.activeAppNames.isEmpty {
+            return "\(monitor.activeAppNames.joined(separator: "、")) 正在使用麦克风，已跟随开启"
+        }
+        return "未检测到会议软件在用麦克风，暂不占用设备"
     }
 
     /// 识别引擎切换：和音频源、语言一样，会话开始后不可改。

@@ -111,12 +111,32 @@ public struct SubtitleSettings: Codable, Sendable, Equatable {
     }
 }
 
+/// 麦克风采集策略。
+public enum MicrophoneMode: String, Codable, Sendable, CaseIterable {
+    /// 不采集麦克风。
+    case off
+    /// 只在别的应用（Teams、飞书等）正在使用麦克风时才采集，默认值。
+    case follow
+    /// 一直采集。
+    case always
+
+    public var displayName: String {
+        switch self {
+        case .off: return "关闭"
+        case .follow: return "跟随会议软件"
+        case .always: return "始终开启"
+        }
+    }
+}
+
 public struct AudioSessionSettings: Codable, Sendable, Equatable {
     public var captureSystemAudio: Bool
     public var captureMicrophone: Bool
     public var recordMeetings: Bool
     /// 记录会议时同时保存两路音频（16 kHz 单声道 m4a），便于事后复盘与重新转写。
     public var recordAudio: Bool
+    /// 麦克风采集策略。默认跟随会议软件：别的应用不开麦就不占用麦克风。
+    public var microphoneMode: MicrophoneMode
     public var otherLanguage: String
     public var meLanguage: String
 
@@ -125,6 +145,7 @@ public struct AudioSessionSettings: Codable, Sendable, Equatable {
         captureMicrophone: Bool = true,
         recordMeetings: Bool = false,
         recordAudio: Bool = true,
+        microphoneMode: MicrophoneMode = .follow,
         otherLanguage: String = AudioLanguageSettings.automatic,
         meLanguage: String = "zh-Hans"
     ) {
@@ -132,6 +153,7 @@ public struct AudioSessionSettings: Codable, Sendable, Equatable {
         self.captureMicrophone = captureMicrophone
         self.recordMeetings = recordMeetings
         self.recordAudio = recordAudio
+        self.microphoneMode = microphoneMode
         self.otherLanguage = otherLanguage
         self.meLanguage = meLanguage
     }
@@ -142,6 +164,13 @@ public struct AudioSessionSettings: Codable, Sendable, Equatable {
         captureMicrophone = try container.decodeIfPresent(Bool.self, forKey: .captureMicrophone) ?? true
         recordMeetings = try container.decodeIfPresent(Bool.self, forKey: .recordMeetings) ?? false
         recordAudio = try container.decodeIfPresent(Bool.self, forKey: .recordAudio) ?? true
+        // 老设置没有这个字段：以前是「开就一直到开」，迁移成 always 保持原行为；
+        // 全新安装则用默认的 follow。
+        if let mode = try? container.decodeIfPresent(MicrophoneMode.self, forKey: .microphoneMode) {
+            microphoneMode = mode
+        } else {
+            microphoneMode = captureMicrophone ? .always : .off
+        }
         otherLanguage = try container.decodeIfPresent(String.self, forKey: .otherLanguage) ?? AudioLanguageSettings.automatic
         meLanguage = try container.decodeIfPresent(String.self, forKey: .meLanguage) ?? "zh-Hans"
     }

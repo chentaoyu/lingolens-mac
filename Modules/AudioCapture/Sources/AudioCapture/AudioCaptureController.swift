@@ -96,6 +96,22 @@ public final class AudioCaptureController: @unchecked Sendable {
         return stream
     }
 
+    /// 会话进行中单独开关麦克风：跟随会议软件时，别的应用不开麦就不占用设备，
+    /// 免得系统一直显示麦克风在用。
+    public func setMicrophoneActive(_ active: Bool) throws {
+        if active {
+            guard microphone == nil else { return }
+            let microphone = MicrophoneCapture { [weak self] buffer in
+                self?.emit(channel: .me, buffer: buffer)
+            }
+            try microphone.start()
+            self.microphone = microphone
+        } else {
+            microphone?.stop()
+            microphone = nil
+        }
+    }
+
     public func stop() {
         systemTap?.stop()
         systemTap = nil

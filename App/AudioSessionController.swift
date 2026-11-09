@@ -1,5 +1,6 @@
 import AudioCapture
 import AVFoundation
+import Combine
 import Foundation
 import LiveSubtitle
 import Meetings
@@ -47,6 +48,14 @@ final class AudioSessionController: ObservableObject {
     @Published private(set) var isMicrophoneMuted = false
     /// 外放时对方声音会从麦克风串回来，用它与「对方」通道去重。
     private var echoSuppressor = EchoSuppressor()
+    /// 监听「别的应用是否在用麦克风」，用于跟随模式。界面也会读它显示状态。
+    let microphoneMonitor = MicrophoneActivityMonitor()
+    private var microphoneWatchTask: Task<Void, Never>?
+    private var cancellables = Set<AnyCancellable>()
+    /// 本次会话是否希望采集麦克风（由音频源设置决定）。
+    private var wantsMicrophone = false
+    /// 麦克风当前是否真的在采集。
+    @Published private(set) var isMicrophoneCapturing = false
 
     /// 缓冲区间累积的峰值，由电平循环按固定帧率取走并平滑衰减。
     private var levelPeak: [AudioChannel: Float] = [:]
@@ -68,6 +77,11 @@ final class AudioSessionController: ObservableObject {
         translation.onTranslation = { [weak self] id, text in
             self?.applyTranslation(lineID: id, text: text)
         }
+
+        // 麦克风使用状态来自另一个 ObservableObject，转发一下让面板能刷新。
+        microphoneMonitor.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
     }
 
     func toggle() async {
@@ -143,12 +157,25 @@ final class AudioSessionController: ObservableObject {
 
             activeLanguages = languageLabels
             statusText = "等待音频…"
+
+            // 麦克风模式：off 完全不采；follow 先不采，等别的应用开麦再采；always 直接采。
+            wantsMicrophone = config.captureMicrophone && config.microphoneMode != .off
+            let startMicrophoneImmediately = wantsMicrophone && config.microphoneMode == .always
+            if wantsMicrophone && config.microphoneMode == .follow {
+                microphoneMonitor.refresh()
+            }
+            let shouldStartMic = startMicrophoneImmediately || microphoneMonitor.isOtherAppUsingInput
+
             let stream = try capture.start(
                 options: AudioCaptureOptions(
                     captureSystemAudio: config.captureSystemAudio,
-                    captureMicrophone: config.captureMicrophone
+                    captureMicrophone: shouldStartMic
                 )
             )
+            isMicrophoneCapturing = shouldStartMic
+            if wantsMicrophone && config.microphoneMode == .follow {
+                startMicrophoneWatch(config: config)
+            }
 
             captureTask = Task { @MainActor [weak self] in
                 for await tagged in stream {
@@ -180,6 +207,28 @@ final class AudioSessionController: ObservableObject {
             await stop()
             state = .failed(error.localizedDescription)
             statusText = error.localizedDescription
+        }
+    }
+
+    /// 跟随会议软件：别的应用开麦就采，关麦就停，避免一直占着麦克风。
+    private func startMicrophoneWatch(config: AudioSessionSettings) {
+        microphoneMonitor.start()
+        microphoneWatchTask?.cancel()
+        microphoneWatchTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let shouldCapture = self.microphoneMonitor.isOtherAppUsingInput && !self.isMicrophoneMuted
+                if shouldCapture != self.isMicrophoneCapturing {
+                    do {
+                        try self.capture.setMicrophoneActive(shouldCapture)
+                        self.isMicrophoneCapturing = shouldCapture
+                        AppLog.write("[audio] 跟随会议软件：麦克风\(shouldCapture ? "开始采集" : "停止采集")")
+                    } catch {
+                        AppLog.write("[audio] 切换麦克风失败：\(error.localizedDescription)")
+                    }
+                }
+                try? await Task.sleep(for: .seconds(1))
+            }
         }
     }
 
@@ -226,6 +275,11 @@ final class AudioSessionController: ObservableObject {
         isRecordingMeeting = false
         isMicrophoneMuted = false
         echoSuppressor.reset()
+        microphoneWatchTask?.cancel()
+        microphoneWatchTask = nil
+        microphoneMonitor.stop()
+        wantsMicrophone = false
+        isMicrophoneCapturing = false
         activeLanguages = [:]
         startedAt = nil
         state = .idle
