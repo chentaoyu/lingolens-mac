@@ -115,15 +115,18 @@ public struct SubtitleSettings: Codable, Sendable, Equatable {
 public enum MicrophoneMode: String, Codable, Sendable, CaseIterable {
     /// 不采集麦克风。
     case off
-    /// 只在别的应用（Teams、飞书等）正在使用麦克风时才采集，默认值。
+    /// 只在别的应用（Teams、飞书等）正在占用麦克风时才采集。
+    ///
+    /// 注意：这里说的是「占用」，不是「静音」。会议软件里静音后它仍然持有输入流，
+    /// 所以这个模式在静音时依然会采集，只是不会在完全没开会时才占用设备。
     case follow
     /// 一直采集。
     case always
 
     public var displayName: String {
         switch self {
-        case .off: return "关闭"
-        case .follow: return "跟随会议软件"
+        case .off: return "关闭（推荐）"
+        case .follow: return "会议软件占用时开启"
         case .always: return "始终开启"
         }
     }
@@ -135,7 +138,7 @@ public struct AudioSessionSettings: Codable, Sendable, Equatable {
     public var recordMeetings: Bool
     /// 记录会议时同时保存两路音频（16 kHz 单声道 m4a），便于事后复盘与重新转写。
     public var recordAudio: Bool
-    /// 麦克风采集策略。默认跟随会议软件：别的应用不开麦就不占用麦克风。
+    /// 麦克风采集策略。默认关闭：不主动占用麦克风，需要时由用户在面板里切换。
     public var microphoneMode: MicrophoneMode
     public var otherLanguage: String
     public var meLanguage: String
@@ -145,7 +148,7 @@ public struct AudioSessionSettings: Codable, Sendable, Equatable {
         captureMicrophone: Bool = true,
         recordMeetings: Bool = false,
         recordAudio: Bool = true,
-        microphoneMode: MicrophoneMode = .follow,
+        microphoneMode: MicrophoneMode = .off,
         otherLanguage: String = AudioLanguageSettings.automatic,
         meLanguage: String = "zh-Hans"
     ) {

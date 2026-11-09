@@ -218,6 +218,25 @@ Sparkle 更新，cdhash 一变，用户授权全部失效。更糟的是系统�
   注意 **必须加 `-legacy`**：OpenSSL 3/4 的默认 p12 算法 macOS Security 框架不认，
   会报 `MAC verification failed during PKCS12 import`。
 
+### 3.11 麦克风采集策略（0.2.5）
+
+macOS 能查到「**谁在采集输入**」，但查不到「**谁静音了**」：
+
+- `kAudioHardwarePropertyProcessObjectList` + `kAudioProcessPropertyIsRunningInput`
+  可以列出正在录音的进程（`MicrophoneActivityMonitor`，按 PID 排除自己）。
+- 但**会议软件里静音 ≠ 停止采集**。实测 Teams 静音后仍然持有输入流，
+  `IsRunningInput` 一直是 true。所以「跟随会议软件占用」这个模式在静音时照样会采。
+
+结论：默认改成 `MicrophoneMode.off` —— 不主动占用麦克风。
+
+| 档位 | 行为 |
+|---|---|
+| 关闭（默认） | 永不采集，不占用设备 |
+| 会议软件占用时开启 | 别的应用占用麦克风时跟着采（静音时也占用，所以也会采） |
+| 始终开启 | 一直采，老用户从旧设置迁移到这一档 |
+
+会话中另有「静音麦克风」开关可以随时暂停这一路（不录音也不转写）。
+
 ### 3.4 设置
 
 - `~/Library/Application Support/LingoLens/settings.json`，300ms 防抖落盘。

@@ -284,9 +284,10 @@ private struct SessionCard: View {
     private var followStatusText: String {
         let monitor = session.microphoneMonitor
         if !monitor.activeAppNames.isEmpty {
-            return "\(monitor.activeAppNames.joined(separator: "、")) 正在使用麦克风，已跟随开启"
+            // 会议软件静音后仍然占用输入流，系统层面看不到「静音」这个状态。
+            return "\(monitor.activeAppNames.joined(separator: "、")) 正在占用麦克风（静音时也算），已跟随开启"
         }
-        return "未检测到会议软件在用麦克风，暂不占用设备"
+        return "未检测到会议软件占用麦克风，暂不占用设备"
     }
 
     /// 识别引擎切换：和音频源、语言一样，会话开始后不可改。
