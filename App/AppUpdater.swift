@@ -17,6 +17,9 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     @Published private(set) var canCheckForUpdates = false
     /// 最近一次实际使用的下载源 host（排查用）。
     @Published private(set) var lastSourceHost: String?
+    /// 发现的新版本号；nil 表示当前已是最新（或还没检查过）。
+    /// 菜单栏用它做「有新版本」的醒目提示。
+    @Published private(set) var availableUpdateVersion: String?
 
     private var controller: SPUStandardUpdaterController?
     private var candidates: [URL] = []
@@ -24,6 +27,8 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     private var forcedURL: URL?
     private var downloadFailed = false
     private var retryTask: Task<Void, Never>?
+    /// 本轮检查是否已发现新版本，用于区分「已是最新」和「有更新」。
+    private var foundUpdateThisCycle = false
 
     private override init() {
         super.init()
@@ -68,8 +73,17 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
 
     // MARK: - SPUUpdaterDelegate
 
+    /// 开发期把 appcast 指到本地/测试源，用于验证更新流程与新版本提示。
+    /// LINGOLENS_FEED_URL=https://localhost:8765/appcast.xml
+    func feedURLString(for updater: SPUUpdater) -> String? {
+        ProcessInfo.processInfo.environment["LINGOLENS_FEED_URL"]
+    }
+
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         downloadFailed = false
+        foundUpdateThisCycle = true
+        availableUpdateVersion = item.displayVersionString
+        AppLog.write("[update] 发现新版本 \(item.displayVersionString)")
         guard let official = item.fileURL else { return }
         refreshCandidates(official: official)
     }
@@ -116,6 +130,11 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
 
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
         AppLog.write("[update] cycle 结束 error=\(error.map { $0.localizedDescription } ?? "nil") 已试=\(attempted.count)/\(candidates.count)")
+        // 这一轮没发现新版本（且没报错）就清掉提示。
+        if !foundUpdateThisCycle, error == nil {
+            availableUpdateVersion = nil
+        }
+        foundUpdateThisCycle = false
         // 兜底：失败回调没被调到时，这里再推一次。
         if error != nil, downloadFailed {
             scheduleRetryFromFailure()

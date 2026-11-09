@@ -21,6 +21,7 @@ enum LingoLensMain {
 struct LingoLensApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var environment = AppEnvironment.shared
+    @ObservedObject private var updater = AppUpdater.shared
 
     var body: some Scene {
         // 主窗口统一由 MainWindowController 创建，避免 SwiftUI Window 场景
@@ -29,8 +30,17 @@ struct LingoLensApp: App {
             MenuBarView()
                 .environmentObject(environment)
         } label: {
-            // 品牌标志的单色 template 版本，系统自动适配浅色 / 深色菜单栏。
-            Label { Text("LingoLens") } icon: { Image("MenuBarIcon") }
+            Label {
+                Text(updater.availableUpdateVersion == nil ? "LingoLens" : "LingoLens 有新版本")
+            } icon: {
+                // 菜单栏条目高度只有 24pt，叠加的小圆点会被裁掉；
+                // 有新版本时直接换成「向下箭头」符号，一眼能看出可以更新。
+                if updater.availableUpdateVersion != nil {
+                    Image(systemName: "arrow.down.circle")
+                } else {
+                    Image("MenuBarIcon")
+                }
+            }
         }
         .menuBarExtraStyle(.window)
     }

@@ -9,6 +9,7 @@ import SwiftUI
 /// 菜单栏面板（`.window` 样式）：模型状态、音频会话控制与快捷入口。
 struct MenuBarView: View {
     @EnvironmentObject private var environment: AppEnvironment
+    @ObservedObject private var updater = AppUpdater.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -98,6 +99,49 @@ struct MenuBarView: View {
         .accessibilityHint("打开模型页")
     }
 
+    /// 更新入口：有新版本时整行高亮成按钮，否则只是一条普通链接。
+    @ViewBuilder
+    private var updateLink: some View {
+        if let version = updater.availableUpdateVersion {
+            Button {
+                closePanel()
+                updater.checkForUpdates()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Color.accentColor)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("有新版本 \(version)")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("点击更新")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color.accentColor.opacity(0.35))
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("有新版本 \(version)，点击更新")
+        } else {
+            MenuLinkButton(title: "检查更新", systemImage: "arrow.triangle.2.circlepath") {
+                closePanel()
+                updater.checkForUpdates()
+            }
+        }
+    }
+
     private var links: some View {
         VStack(spacing: 2) {
             MenuLinkButton(title: "划词翻译", systemImage: "character.bubble", shortcut: environment.hotkeyDisplay) {
@@ -115,10 +159,7 @@ struct MenuBarView: View {
                 closePanel()
                 environment.openLogsFolder()
             }
-            MenuLinkButton(title: "检查更新…", systemImage: "arrow.down.circle") {
-                closePanel()
-                AppUpdater.shared.checkForUpdates()
-            }
+            updateLink
             MenuLinkButton(title: "退出 LingoLens", systemImage: "power", shortcut: "⌘Q") {
                 NSApp.terminate(nil)
             }
