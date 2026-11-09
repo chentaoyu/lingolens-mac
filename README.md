@@ -211,10 +211,39 @@ LINGOLENS_SPEECH_TEST_FILE=/tmp/zh.aiff LINGOLENS_SPEECH_LOCALE=zh-Hans \
   swift test --filter SpeechTranscriptionIntegrationTests
 ```
 
+## 许可证
+
+本项目采用 **[PolyForm Noncommercial License 1.0.0](LICENSE)**（非商业许可），许可证全文见 [LICENSE](LICENSE)。
+
+**可以做的事**
+
+- 个人使用：学习、研究、试用、业余项目
+- 改动源码、二次开发（非商业用途）
+- 分发副本（需随附本许可证，并保留 `Required Notice` 版权声明）
+- 教育机构、公益组织、公共科研机构、政府机构使用
+
+**不可以做的事**
+
+- 任何商业用途：包括但不限于公司内部生产使用、对外提供付费服务、
+  打包进商业产品、以引流/获客为目的的分发
+- 需要商业授权请联系作者
+
+**第三方组件分别适用其各自的许可证**，不受本项目许可影响：
+
+| 组件 | 许可证 |
+|---|---|
+| [Sparkle](https://github.com/sparkle-project/Sparkle)（自动更新框架） | MIT |
+| [uv](https://github.com/astral-sh/uv)（内置 Python 包管理器） | Apache-2.0 / MIT |
+| [mlx-vlm](https://github.com/Blaizzy/mlx-vlm)、mlx-audio（运行时安装） | MIT |
+| Whisper 模型权重（用户自行下载） | MIT（OpenAI） |
+| Qwen 模型权重（用户自行下载） | 见模型仓库自带许可 |
+
+模型权重不随本仓库分发，由用户按各自许可自行下载。
+
 ## 已知限制
 
 - 仅本地签名运行，未做 Apple 公证（首次打开需要手动放行）；自动更新走 Sparkle + GitHub Releases。
 - 实时音频/会议纪要已实现，但系统音频采集需要 TCC 授权，双路字幕与回声效果需真机手动验收。
-- 音频设备选择、会议音频保存（m4a）尚未实现；字幕字号/透明度暂无 UI 控件。
+- 音频设备选择尚未实现；会议音频已支持保存为 16 kHz 单声道 m4a（设置里可关）。
 - 固定版本的 mlx-vlm 服务参数（`--kv-bits`、`--max-kv-size`）以实际安装版本为准，
   如版本不支持可在服务参数中改用额外参数覆盖。
