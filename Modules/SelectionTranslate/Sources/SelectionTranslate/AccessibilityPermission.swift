@@ -32,15 +32,46 @@ public enum AccessibilityPermission {
         _ = AXIsProcessTrustedWithOptions(options)
     }
 
-    /// 综合判断：本进程可用就直接算已授权；否则起一个子进程复查。
-    public static func resolvedState() -> AccessibilityTrustState {
-        if isTrusted { return .granted }
-        switch childProcessTrust() {
-        case .some(true): return .needsRestart
-        // 子进程也读不到就按「未授权」处理；子进程本身跑不起来时同样退回未授权，
-        // 宁可多提示一次，也不要假装已授权让划词翻译失效。
-        case .some(false), .none: return .denied
+    /// 一次判定的全部原始信息，便于在日志里定位「明明授权了却提示未授权」。
+    public struct Diagnosis: Sendable, Equatable {
+        public let inProcess: Bool
+        public let childProcess: Bool?
+        public let state: AccessibilityTrustState
+
+        public init(inProcess: Bool, childProcess: Bool?, state: AccessibilityTrustState) {
+            self.inProcess = inProcess
+            self.childProcess = childProcess
+            self.state = state
         }
+    }
+
+    /// 综合判断。
+    ///
+    /// 只用本进程的判定。曾经想靠「起子进程读同一个二进制」区分「真没授权」和
+    /// 「授权了但本进程没生效」，实测行不通：子进程的 TCC 身份跟随**责任进程**
+    /// （也就是本应用），拿到的仍是同样结果，永远判不出 needsRestart。
+    public static func resolvedState() -> AccessibilityTrustState {
+        diagnose().state
+    }
+
+    public static func diagnose() -> Diagnosis {
+        let trusted = isTrusted
+        return Diagnosis(
+            inProcess: trusted,
+            childProcess: nil,
+            state: trusted ? .granted : .denied
+        )
+    }
+
+    /// 让系统把**当前正在运行的这份二进制**登记到辅助功能列表里，并弹出授权提示。
+    ///
+    /// 关键点：TCC 条目是按代码签名绑定的，ad-hoc 签名每次构建 cdhash 都变，
+    /// 所以老条目看着是「开着的」，却对不上现在跑的这份。让当前进程自己申请，
+    /// 系统登记的才是这一份。
+    @discardableResult
+    public static func requestRegistration() -> Bool {
+        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+        return AXIsProcessTrustedWithOptions(options)
     }
 
     /// 用同一个二进制起一个子进程读判定。返回 nil 表示没跑起来。

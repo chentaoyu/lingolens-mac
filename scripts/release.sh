@@ -5,7 +5,20 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-SIGN_IDENTITY="${SIGN_IDENTITY:--}"            # 默认 ad-hoc；建议换成固定的自签名证书
+# 默认用固定的自签名证书签名。
+# ad-hoc 签名会让「指定要求」变成 cdhash 列表，每次构建都变，用户每次更新都会
+# 丢掉辅助功能/麦克风/屏幕录制授权；换成固定证书后要求变成 identifier + 证书，跨版本稳定。
+DEFAULT_IDENTITY="LingoLens Self Sign"
+if [[ -n "${SIGN_IDENTITY:-}" ]]; then
+  : # 显式指定优先
+elif security find-identity -v -p codesigning 2>/dev/null | grep -qF "$DEFAULT_IDENTITY"; then
+  SIGN_IDENTITY="$DEFAULT_IDENTITY"
+  echo "🔏 使用固定证书签名：$SIGN_IDENTITY"
+else
+  SIGN_IDENTITY="-"
+  echo "⚠️  未找到「$DEFAULT_IDENTITY」证书，退回 ad-hoc 签名。"
+  echo "    注意：ad-hoc 签名会导致用户每次更新都要重新授权隐私权限。"
+fi
 REPO=chentaoyu/lingolens-mac
 BUILD_DIR=build
 DIST_DIR=dist
@@ -20,6 +33,14 @@ DMG="$DIST_DIR/LingoLens-$VERSION.dmg"
 
 # 整包重签一次，保证内嵌的 Sparkle.framework 与主程序签名身份一致。
 codesign --force --deep --sign "$SIGN_IDENTITY" "$APP"
+
+# 打印「指定要求」：TCC 认的就是它。这里出现 cdhash 说明签名不稳定，
+# 用户每次更新都要重新授权，必须修掉。
+REQUIREMENT=$(codesign -d -r- "$APP" 2>&1 | grep 'designated =>' | sed 's/^ *//')
+echo "🔏 $REQUIREMENT"
+if [[ "$REQUIREMENT" == *cdhash* ]]; then
+  echo "⚠️  警告：指定要求里是 cdhash，属于 ad-hoc 签名，用户每次更新都会丢失隐私授权。"
+fi
 
 mkdir -p "$DIST_DIR"
 STAGE=$(mktemp -d)

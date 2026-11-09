@@ -188,6 +188,36 @@
 - **滚动加载**：LazyVStack 最后一行出现时自动取下一页，另给一个「加载更多」兜底按钮；
   每次换关键词用 generation 代号丢弃过期响应，避免慢请求覆盖新结果。
 
+### 3.10 稳定代码签名（0.2.1）
+
+ad-hoc 签名会让 App 的「指定要求」变成 **cdhash 列表**：
+
+    designated => cdhash H"0fecb7a1…" or cdhash H"0869e6bf…"
+
+TCC（辅助功能、麦克风、屏幕录制）就是按这个要求记授权的，所以每次重新构建/每次
+Sparkle 更新，cdhash 一变，用户授权全部失效。更糟的是系统设置里那条旧记录仍显示「已开启」，
+用户看到的是「明明开着却说未授权」，很难自己排查。
+
+改用固定的自签名证书后，指定要求变成：
+
+    designated => identifier "com.lingolens.mac" and certificate root = H"02c2983e…"
+
+**证书不变，授权跨版本保留**。用户在切换到这个签名的版本时需要**最后重新授权一次**
+（旧记录是 cdhash 形式），之后所有更新都不必再管。
+
+配套改动：
+
+- `scripts/release.sh` 默认用「LingoLens Self Sign」证书签名；找不到证书时退回 ad-hoc
+  并打印警告；构建后打印 designated requirement，出现 `cdhash` 就告警。
+- 生成证书（本地一次性）：
+  ```
+  openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 3650 -nodes -config cs.conf
+  openssl pkcs12 -export -legacy -out cert.p12 -inkey key.pem -in cert.pem -name "LingoLens Self Sign"
+  security import cert.p12 -k ~/Library/Keychains/login.keychain-db -P <pass> -T /usr/bin/codesign
+  ```
+  注意 **必须加 `-legacy`**：OpenSSL 3/4 的默认 p12 算法 macOS Security 框架不认，
+  会报 `MAC verification failed during PKCS12 import`。
+
 ### 3.4 设置
 
 - `~/Library/Application Support/LingoLens/settings.json`，300ms 防抖落盘。

@@ -61,8 +61,11 @@ struct HomeView: View {
     /// 授权判定可能要起子进程复查，放到后台，避免卡住界面。
     private func refreshAccessibility() {
         Task.detached(priority: .utility) {
-            let state = AccessibilityPermission.resolvedState()
-            await MainActor.run { accessibilityState = state }
+            let diagnosis = AccessibilityPermission.diagnose()
+            AppLog.write(
+                "[ax] 本进程=\(diagnosis.inProcess) 子进程=\(String(describing: diagnosis.childProcess)) 结论=\(diagnosis.state)"
+            )
+            await MainActor.run { accessibilityState = diagnosis.state }
         }
     }
 
@@ -120,10 +123,14 @@ struct HomeView: View {
         } else if accessibilityState == .denied {
             IssueBanner(
                 title: "未授予辅助功能权限",
-                message: "划词翻译会退化为模拟 ⌘C 读取选中文字，部分应用可能取不到。",
+                message: "点「去授权」在系统设置里勾选 LingoLens 与「终端」；如果那里本来就勾着，说明那条授权对应的是旧版本，删掉重新授权即可。",
                 tint: Color.warning
             ) {
-                Button("去授权") { AccessibilityPermission.openSystemSettings() }
+                Button("去授权") {
+                    // 先让系统登记「当前这份二进制」，否则列表里的老条目仍对不上它。
+                    AccessibilityPermission.requestRegistration()
+                    AccessibilityPermission.openSystemSettings()
+                }
             }
         }
         if !environment.coordinator.isHotkeyRegistered {
