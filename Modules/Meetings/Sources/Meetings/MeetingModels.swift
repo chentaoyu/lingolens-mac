@@ -7,13 +7,23 @@ public struct MeetingMeta: Codable, Sendable, Equatable, Identifiable {
     public var startedAt: Date
     public var endedAt: Date?
     public var languages: [String: String]
+    /// 已落盘的音频文件名，键是通道（`other` / `me`）。旧数据没有这个字段。
+    public var audioFiles: [String: String]?
 
-    public init(id: String, title: String, startedAt: Date, endedAt: Date? = nil, languages: [String: String]) {
+    public init(
+        id: String,
+        title: String,
+        startedAt: Date,
+        endedAt: Date? = nil,
+        languages: [String: String],
+        audioFiles: [String: String]? = nil
+    ) {
         self.id = id
         self.title = title
         self.startedAt = startedAt
         self.endedAt = endedAt
         self.languages = languages
+        self.audioFiles = audioFiles
     }
 
     public var duration: TimeInterval {

@@ -92,6 +92,20 @@ public actor MeetingStore {
         return entries
     }
 
+    /// 录音文件落在会议目录下，文件名形如 `audio-other.m4a`。
+    public func audioFileURL(id: String, channel: AudioChannel) -> URL {
+        directory(for: id).appendingPathComponent("audio-\(channel.rawValue).m4a")
+    }
+
+    /// 记录哪些通道已经落盘，供界面显示与后续重转写使用。
+    public func setAudioFiles(id: String, files: [AudioChannel: URL]) throws {
+        var meta = try loadMeta(id: id)
+        meta.audioFiles = files.reduce(into: [String: String]()) { result, pair in
+            result[pair.key.rawValue] = pair.value.lastPathComponent
+        }
+        try writeMeta(meta)
+    }
+
     public func load(id: String) throws -> MeetingDetail {
         let meta = try loadMeta(id: id)
         let entries = try entries(id: id)

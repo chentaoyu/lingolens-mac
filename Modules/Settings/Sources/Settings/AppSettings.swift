@@ -115,6 +115,8 @@ public struct AudioSessionSettings: Codable, Sendable, Equatable {
     public var captureSystemAudio: Bool
     public var captureMicrophone: Bool
     public var recordMeetings: Bool
+    /// 记录会议时同时保存两路音频（16 kHz 单声道 m4a），便于事后复盘与重新转写。
+    public var recordAudio: Bool
     public var otherLanguage: String
     public var meLanguage: String
 
@@ -122,12 +124,14 @@ public struct AudioSessionSettings: Codable, Sendable, Equatable {
         captureSystemAudio: Bool = true,
         captureMicrophone: Bool = true,
         recordMeetings: Bool = false,
+        recordAudio: Bool = true,
         otherLanguage: String = AudioLanguageSettings.automatic,
         meLanguage: String = "zh-Hans"
     ) {
         self.captureSystemAudio = captureSystemAudio
         self.captureMicrophone = captureMicrophone
         self.recordMeetings = recordMeetings
+        self.recordAudio = recordAudio
         self.otherLanguage = otherLanguage
         self.meLanguage = meLanguage
     }
@@ -137,6 +141,7 @@ public struct AudioSessionSettings: Codable, Sendable, Equatable {
         captureSystemAudio = try container.decodeIfPresent(Bool.self, forKey: .captureSystemAudio) ?? true
         captureMicrophone = try container.decodeIfPresent(Bool.self, forKey: .captureMicrophone) ?? true
         recordMeetings = try container.decodeIfPresent(Bool.self, forKey: .recordMeetings) ?? false
+        recordAudio = try container.decodeIfPresent(Bool.self, forKey: .recordAudio) ?? true
         otherLanguage = try container.decodeIfPresent(String.self, forKey: .otherLanguage) ?? AudioLanguageSettings.automatic
         meLanguage = try container.decodeIfPresent(String.self, forKey: .meLanguage) ?? "zh-Hans"
     }

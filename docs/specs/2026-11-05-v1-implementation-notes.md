@@ -82,6 +82,18 @@
 - 完整性依赖 appcast 的 EdDSA 签名，因此走第三方加速也不会被替换。
 - 设置项 `update.source`：`automatic` / `official` / `custom`（支持 `{url}` 占位符）。
 
+### 3.3.2 会议音频落盘
+
+- 采集回调给出的缓冲区本身已是深拷贝（两路 Tap 都调 `AudioBufferTools.copy`），
+  可以安全地同时交给识别器和录音器。
+- `ChannelAudioRecorder` 统一录成 **16 kHz 单声道 AAC（32 kbps）**：和识别器输入一致，
+  体积约 16 MB/小时，可直接用于事后重转写与识别效果比对。
+- 已经是目标格式时跳过 `AVAudioConverter` 直接写文件——转换器每次调用都有缓冲延迟，
+  逐块转换会累积丢帧；只有 48 kHz 立体声这类采集格式才走转换 + 混音。
+- 写入跑在私有串行队列上，不阻塞采集回调与主线程；`finish()` 会阻塞到队列排空再返回。
+- 会话结束时把实际落盘的通道登记进 `meta.json` 的 `audioFiles`（旧数据没有该字段，解码时容忍缺失）；
+  某一路没有产生音频就删掉空文件、不登记。
+
 ### 3.4 设置
 
 - `~/Library/Application Support/LingoLens/settings.json`，300ms 防抖落盘。

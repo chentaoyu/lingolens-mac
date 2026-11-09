@@ -161,6 +161,8 @@ lingolens-mac/
 - 下载的模型：`~/Library/Application Support/LingoLens/models/`
 - 日志：`~/Library/Logs/LingoLens/<模型名>.log`
 - 会议（v3）：`~/Library/Application Support/LingoLens/meetings/<日期-时间>/`
+  - `meta.json` / `transcript.jsonl` / `minutes.md`
+  - `audio-other.m4a` / `audio-me.m4a`（开启「同时保存音频」时；16 kHz 单声道，约 16 MB/小时）
 
 ## 测试
 

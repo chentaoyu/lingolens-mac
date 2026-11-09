@@ -37,6 +37,8 @@ final class AudioSessionController: ObservableObject {
     private var captureTask: Task<Void, Never>?
     private var eventTasks: [AudioChannel: Task<Void, Never>] = [:]
     private var currentMeeting: MeetingMeta?
+    /// 录音落盘：每路一个 m4a，会议目录下 `audio-<channel>.m4a`。
+    private var recorders: [AudioChannel: ChannelAudioRecorder] = [:]
 
     /// 缓冲区间累积的峰值，由电平循环按固定帧率取走并平滑衰减。
     private var levelPeak: [AudioChannel: Float] = [:]
@@ -100,6 +102,9 @@ final class AudioSessionController: ObservableObject {
                 let meta = try await meetingStore.create(title: nil, languages: languageLabels)
                 currentMeeting = meta
                 isRecordingMeeting = true
+                if config.recordAudio {
+                    await startRecorders(meetingID: meta.id, channels: Array(languages.keys))
+                }
             }
 
             for (channel, identifiers) in languages {
@@ -125,9 +130,12 @@ final class AudioSessionController: ObservableObject {
 
             captureTask = Task { @MainActor [weak self] in
                 for await tagged in stream {
-                    guard let self, let session = self.sessions[tagged.channel] else { continue }
+                    guard let self else { continue }
                     let level = AudioBufferTools.level(of: tagged.buffer)
                     self.levelPeak[tagged.channel] = max(self.levelPeak[tagged.channel] ?? 0, level)
+                    // 录音与转写各拿一份：录音内部转成 16k 单声道，不阻塞采集。
+                    self.recorders[tagged.channel]?.append(tagged.buffer)
+                    guard let session = self.sessions[tagged.channel] else { continue }
                     await session.append(tagged.buffer)
                 }
             }
@@ -168,6 +176,7 @@ final class AudioSessionController: ObservableObject {
 
         let finishedMeeting = currentMeeting
         if let meeting = currentMeeting {
+            await finishRecorders(meetingID: meeting.id)
             try? await meetingStore.finish(id: meeting.id)
         }
         currentMeeting = nil
@@ -178,6 +187,44 @@ final class AudioSessionController: ObservableObject {
         statusText = "已停止"
         onSessionFinished?()
         return finishedMeeting
+    }
+
+    // MARK: - 录音落盘
+
+    /// 为每路建一个 m4a。失败只记日志，不影响转写本身。
+    private func startRecorders(meetingID: String, channels: [AudioChannel]) async {
+        recorders.removeAll()
+        for channel in channels {
+            let url = await meetingStore.audioFileURL(id: meetingID, channel: channel)
+            do {
+                recorders[channel] = try ChannelAudioRecorder(url: url)
+            } catch {
+                AppLog.write("[audio] 无法创建录音文件 \(channel.rawValue): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// 收尾：等所有音频写完再登记到 meta，保证记录与文件一致。
+    private func finishRecorders(meetingID: String) async {
+        guard !recorders.isEmpty else { return }
+        var files: [AudioChannel: URL] = [:]
+        for (channel, recorder) in recorders {
+            recorder.finish()
+            // 没有任何音频（例如那一路没有权限）就不登记空文件。
+            if recorder.writtenFrames > 0 {
+                files[channel] = recorder.url
+            } else {
+                try? FileManager.default.removeItem(at: recorder.url)
+            }
+            AppLog.write(
+                "[audio] \(channel.rawValue) 录音结束 时长=\(String(format: "%.1f", recorder.duration))s "
+                    + "写入失败=\(recorder.failureCount)"
+            )
+        }
+        recorders.removeAll()
+        if !files.isEmpty {
+            try? await meetingStore.setAudioFiles(id: meetingID, files: files)
+        }
     }
 
     // MARK: - 电平

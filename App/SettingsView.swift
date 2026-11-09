@@ -149,12 +149,17 @@ struct AppSettingsView: View {
                 Toggle("系统音频（对方）", isOn: audioBinding(\.captureSystemAudio))
                 Toggle("麦克风（我）", isOn: audioBinding(\.captureMicrophone))
                 Toggle("记录会议", isOn: audioBinding(\.recordMeetings))
+                if environment.settings.audioSession.recordMeetings {
+                    Toggle("同时保存音频", isOn: audioBinding(\.recordAudio))
+                }
                 Picker("对方语言", selection: audioBinding(\.otherLanguage)) { audioLanguageOptions }
                 Picker("我的语言", selection: audioBinding(\.meLanguage)) { audioLanguageOptions }
             } header: {
                 Text("音频会话")
             } footer: {
                 Text("会话开始时读取这些设置，运行中修改需停止后重新开始才生效。选「自动识别」时会同时加载中英两套语音模型，按每句话的置信度自动判断语言。")
+                    .foregroundStyle(.secondary)
+                Text("「同时保存音频」会把两路声音各存成 16 kHz 单声道 m4a（约 16 MB/小时），放在会议目录里，可用于事后复盘与重新转写。")
                     .foregroundStyle(.secondary)
             }
 
