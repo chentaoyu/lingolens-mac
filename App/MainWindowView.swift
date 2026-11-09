@@ -150,9 +150,24 @@ private struct SidebarStatusFooter: View {
             HStack(spacing: 6) {
                 Text(AppUpdater.versionText)
                     .monospacedDigit()
-                Button("检查更新") { updater.checkForUpdates() }
-                    .buttonStyle(.link)
+                if let version = updater.availableUpdateVersion {
+                    // 有新版本：换成带箭头的强调色按钮，和菜单栏面板保持一致。
+                    Button {
+                        updater.checkForUpdates()
+                    } label: {
+                        Label("有新版本 \(version)", systemImage: "arrow.down.circle.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    .buttonStyle(.plain)
                     .disabled(!updater.canCheckForUpdates)
+                    .help("点击更新到 \(version)")
+                    .accessibilityLabel("有新版本 \(version)，点击更新")
+                } else {
+                    Button("检查更新") { updater.checkForUpdates() }
+                        .buttonStyle(.link)
+                        .disabled(!updater.canCheckForUpdates)
+                }
             }
             .foregroundStyle(.tertiary)
         }
