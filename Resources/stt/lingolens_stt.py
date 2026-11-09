@@ -33,8 +33,18 @@ INT16_SCALE = 32768.0
 FRAME_MS = 20
 FRAME = SAMPLE_RATE * FRAME_MS // 1000
 
-# 能量阈值：实测普通话近场说话 RMS 约 0.02–0.15，环境噪声常在 0.005 以下。
-SILENCE_RMS = 0.008
+# 能量阈值。实测数据（真实会议录音）：
+#   对方（系统音频）真实说话 RMS 0.05–0.2，静音处 0.000；
+#   麦克风只有环境噪声时 p50=0.0056、p90=0.0083、最大 0.0277。
+# 原来用 0.008 会把麦克风噪声全当成语音，切出大量近乎静音的段，
+# Whisper 在这些段上会稳定产生「请不吝点赞 订阅 转发…」这类幻觉。
+SILENCE_RMS = 0.012
+# 自适应噪声底：取最近 3 秒的第 20 百分位当作底噪，语音阈值取其倍数。
+NOISE_WINDOW_FRAMES = 150
+NOISE_PERCENTILE = 20
+NOISE_MULTIPLIER = 2.2
+# 句子太短容易是噪声碎片。
+MIN_SPEECH_SEC = 0.6
 # 句尾连续静音达到该时长即断句。
 SILENCE_HANG_SEC = 0.42
 # 超过这个时长就找一个「安静点」断句，避免字幕迟迟不出。
@@ -43,8 +53,15 @@ SOFT_MAX_SEGMENT_SEC = 9.0
 MAX_SEGMENT_SEC = 25.0
 # 软断句的安静点门槛：低于它说明正处在词间停顿，此刻切句不会切断字词。
 SOFT_CUT_RMS = SILENCE_RMS * 3
-# 过短的段丢弃（咳嗽、敲键盘）。
-MIN_SPEECH_SEC = 0.25
+# 已知的 Whisper 幻觉片段：几乎只在静音/噪声上出现，命中就整段丢弃。
+HALLUCINATION_MARKERS = (
+    "请不吝点赞",
+    "订阅转发",
+    "字幕志愿者",
+    "明镜与点点",
+    "打赏支持",
+    "字幕由",
+)
 # 句首回补，避免吞掉第一个字的起音。
 PREROLL_FRAMES = SAMPLE_RATE * 25 // 100
 
@@ -70,6 +87,14 @@ class Segmenter:
         self._silence_run = 0.0
         self._segment_start = 0.0
         self._position = 0.0
+        # 最近若干帧的 RMS，用来估底噪。
+        self._recent = []
+
+    def _threshold(self):
+        if not self._recent:
+            return SILENCE_RMS
+        floor = float(np.percentile(self._recent, NOISE_PERCENTILE))
+        return max(SILENCE_RMS, floor * NOISE_MULTIPLIER)
 
     def feed(self, samples):
         """喂入 float32 样本，返回已完整的 [(start, end, audio)]。"""
@@ -84,7 +109,12 @@ class Segmenter:
             self._position += FRAME_MS / 1000.0
             rms = float(np.sqrt(np.mean(frame * frame)) + 1e-12)
 
-            if rms >= SILENCE_RMS:
+            self._recent.append(rms)
+            if len(self._recent) > NOISE_WINDOW_FRAMES:
+                self._recent.pop(0)
+            threshold = self._threshold()
+
+            if rms >= threshold:
                 if not self._in_speech:
                     self._in_speech = True
                     preroll = len(self._preroll)
@@ -120,6 +150,8 @@ class Segmenter:
     def _cut(self):
         audio = np.concatenate(self._pending) if self._pending else np.zeros(0, dtype=np.float32)
         start, end = self._segment_start, self._position
+        # 记下这一段的平均能量，供转写阶段做二次过滤。
+        self._last_rms = float(np.sqrt(np.mean(audio * audio))) if len(audio) else 0.0
         self._in_speech = False
         self._pending = []
         self._silence_run = 0.0
@@ -159,6 +191,12 @@ def main():
                 return
             start, end, audio = item
             if len(audio) / SAMPLE_RATE < MIN_SPEECH_SEC:
+                log("丢弃过短片段 %.2fs" % (len(audio) / SAMPLE_RATE))
+                continue
+            # 整段平均能量太低：几乎一定是噪声，别送去诱骗 Whisper。
+            seg_rms = float(np.sqrt(np.mean(audio * audio))) if len(audio) else 0.0
+            if seg_rms < SILENCE_RMS:
+                log("丢弃低能量片段 rms=%.4f 时长=%.2fs" % (seg_rms, len(audio) / SAMPLE_RATE))
                 continue
             began = time.time()
             try:
@@ -171,6 +209,9 @@ def main():
                 text = (result.text or "").strip()
             except Exception as exc:  # 单句失败不应终止整个会话
                 emit({"type": "error", "message": "%s: %s" % (type(exc).__name__, exc)})
+                continue
+            if text and any(marker in text for marker in HALLUCINATION_MARKERS):
+                log("丢弃幻觉片段: %s" % text[:30])
                 continue
             if text:
                 emit({

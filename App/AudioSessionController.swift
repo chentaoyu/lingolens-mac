@@ -153,8 +153,12 @@ final class AudioSessionController: ObservableObject {
                     self.levelPeak[tagged.channel] = max(self.levelPeak[tagged.channel] ?? 0, level)
                     // 录音与转写各拿一份：录音内部转成 16k 单声道，不阻塞采集。
                     self.recorders[tagged.channel]?.append(tagged.buffer)
-                    guard let session = self.sessions[tagged.channel] else { continue }
-                    await session.append(tagged.buffer)
+                    // 两套引擎只会有一套在跑：Whisper 边车 或 系统识别会话。
+                    if let transcriber = self.whisperSessions[tagged.channel] {
+                        await transcriber.append(tagged.buffer)
+                    } else if let session = self.sessions[tagged.channel] {
+                        await session.append(tagged.buffer)
+                    }
                 }
             }
 
