@@ -8,6 +8,8 @@ public struct SubtitlePanelView: View {
     private let onToggleClickThrough: () -> Void
 
     @State private var isHovering = false
+    /// 是否跟随最新一行；用户往上滚动后置 false，避免抢滚动位置。
+    @State private var isPinnedToBottom = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(
@@ -31,18 +33,7 @@ public struct SubtitlePanelView: View {
                     .foregroundStyle(.white.opacity(0.5))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(lines.suffix(4)) { line in
-                        row(for: line)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                .animation(
-                    reduceMotion ? nil : .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.24),
-                    value: lines.map(\.id)
-                )
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: lines)
+                subtitleScroll
             }
         }
         .padding(14)
@@ -67,6 +58,78 @@ public struct SubtitlePanelView: View {
 
     private var lines: [SubtitleLine] {
         model.pausedLines ?? store.lines
+    }
+
+    /// 可滚动的字幕列表：默认跟随最新一行，用户往上翻后就不再抢滚动位置。
+    private var subtitleScroll: some View {
+        ScrollViewReader { proxy in
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView(.vertical) {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(lines) { line in
+                            row(for: line)
+                                .id(line.id)
+                        }
+                        // 底部锚点：滚到它就等于停在最新一行。
+                        Color.clear
+                            .frame(height: 1)
+                            .id(Self.bottomAnchor)
+                    }
+                    .padding(.vertical, 2)
+                }
+                .scrollIndicators(.automatic)
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    let distance = geometry.contentSize.height
+                        - geometry.containerSize.height
+                        - geometry.contentOffset.y
+                    return distance <= 24
+                } action: { _, atBottom in
+                    isPinnedToBottom = atBottom
+                }
+                .onChange(of: lines.last?.id) { _, _ in
+                    guard isPinnedToBottom else { return }
+                    scrollToBottom(proxy, animated: !reduceMotion)
+                }
+                .onChange(of: lines.count) { _, _ in
+                    guard isPinnedToBottom else { return }
+                    scrollToBottom(proxy, animated: false)
+                }
+
+                // 往上翻之后给一个回到底部的入口，否则新字幕只能干等。
+                if !isPinnedToBottom {
+                    Button {
+                        isPinnedToBottom = true
+                        scrollToBottom(proxy, animated: !reduceMotion)
+                    } label: {
+                        Label("回到最新", systemImage: "arrow.down.to.line")
+                            .font(.system(size: 10, weight: .medium))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(Color.white.opacity(0.18)))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white.opacity(0.9))
+                    .padding(6)
+                    .transition(.opacity)
+                }
+            }
+            .onAppear {
+                // 打开时直接停在最新一行。
+                isPinnedToBottom = true
+                scrollToBottom(proxy, animated: false)
+            }
+        }
+    }
+
+    private static let bottomAnchor = "subtitle-bottom-anchor"
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
+        let action = { proxy.scrollTo(Self.bottomAnchor, anchor: .bottom) }
+        if animated {
+            withAnimation(.easeOut(duration: 0.2)) { action() }
+        } else {
+            action()
+        }
     }
 
     // MARK: - 控制条

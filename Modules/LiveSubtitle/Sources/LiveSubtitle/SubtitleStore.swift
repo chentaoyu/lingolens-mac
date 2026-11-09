@@ -6,11 +6,15 @@ import Transcriber
 @MainActor
 public final class SubtitleStore: ObservableObject {
     @Published public private(set) var lines: [SubtitleLine] = []
+    /// 保留的行数上限。
+    ///
+    /// 字幕浮窗要能往上翻看整场会议，所以不再只留最后几行；这里只是防止
+    /// 长时间运行导致内存无界增长（2000 行约等于十几小时的会议）。
     public var maxLines: Int
 
     private var partialIDs: [AudioChannel: UUID] = [:]
 
-    public init(maxLines: Int = 8) {
+    public init(maxLines: Int = 2000) {
         self.maxLines = maxLines
     }
 
