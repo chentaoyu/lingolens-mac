@@ -6,18 +6,49 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # 默认用固定的自签名证书签名。
-# ad-hoc 签名会让「指定要求」变成 cdhash 列表，每次构建都变，用户每次更新都会
-# 丢掉辅助功能/麦克风/屏幕录制授权；换成固定证书后要求变成 identifier + 证书，跨版本稳定。
+#
+# 为什么必须这样：ad-hoc 签名会让 App 的「指定要求」变成 cdhash 列表，每次构建都变。
+# TCC（辅助功能 / 麦克风 / 屏幕录制）按这个要求记授权，于是用户每次更新都要重新授权，
+# 而系统设置里那条旧记录还显示「已开启」，极难自查。固定证书后要求变成
+# identifier + certificate root，跨版本稳定。
+#
+# 因此：找不到证书就**直接失败**。宁可发布被拦下来，也不要悄悄发出一个会让
+# 所有用户丢授权的版本。
 DEFAULT_IDENTITY="LingoLens Self Sign"
+
 if [[ -n "${SIGN_IDENTITY:-}" ]]; then
-  : # 显式指定优先
+  # 显式指定优先，仍要校验它真的存在。
+  if [[ "$SIGN_IDENTITY" != "-" ]] \
+    && ! security find-identity -v -p codesigning 2>/dev/null | grep -qF "$SIGN_IDENTITY"; then
+    echo "❌ 找不到签名身份：$SIGN_IDENTITY"
+    echo "   可用身份："
+    security find-identity -v -p codesigning | sed 's/^/     /'
+    exit 1
+  fi
 elif security find-identity -v -p codesigning 2>/dev/null | grep -qF "$DEFAULT_IDENTITY"; then
   SIGN_IDENTITY="$DEFAULT_IDENTITY"
   echo "🔏 使用固定证书签名：$SIGN_IDENTITY"
 else
-  SIGN_IDENTITY="-"
-  echo "⚠️  未找到「$DEFAULT_IDENTITY」证书，退回 ad-hoc 签名。"
-  echo "    注意：ad-hoc 签名会导致用户每次更新都要重新授权隐私权限。"
+  echo "❌ 找不到签名证书「${DEFAULT_IDENTITY}」，已中止发布。"
+  echo ""
+  echo "   原因：ad-hoc 签名会让指定要求变成 cdhash，用户每次更新都会丢失"
+  echo "        辅助功能 / 麦克风 / 屏幕录制授权，且系统设置里看不出来。"
+  echo ""
+  echo "   解决：在装有该证书备份的机器上执行（见 lingolens-signing-README.md）"
+  echo '         security import lingolens-signing.p12 -k ~/Library/Keychains/login.keychain-db'
+  echo '           -P "$(cat lingolens-signing.password)" -T /usr/bin/codesign -T /usr/bin/security'
+  echo ""
+  echo "   确实要发 ad-hoc 版本（仅限本地自测）时显式放行："
+  echo "         SIGN_IDENTITY=- ALLOW_ADHOC_SIGNING=1 scripts/release.sh"
+  exit 1
+fi
+
+# 只有显式写了 ALLOW_ADHOC_SIGNING=1 才允许 ad-hoc。
+if [[ "$SIGN_IDENTITY" == "-" && "${ALLOW_ADHOC_SIGNING:-0}" != "1" ]]; then
+  echo "❌ 拒绝用 ad-hoc 签名发布。"
+  echo "   这种版本会让用户每次更新都重新授权隐私权限。"
+  echo "   仅本地自测请显式放行：SIGN_IDENTITY=- ALLOW_ADHOC_SIGNING=1 scripts/release.sh"
+  exit 1
 fi
 REPO=chentaoyu/lingolens-mac
 BUILD_DIR=build
@@ -38,8 +69,16 @@ codesign --force --deep --sign "$SIGN_IDENTITY" "$APP"
 # 用户每次更新都要重新授权，必须修掉。
 REQUIREMENT=$(codesign -d -r- "$APP" 2>&1 | grep 'designated =>' | sed 's/^ *//')
 echo "🔏 $REQUIREMENT"
+
+# 最后一道闸：签完再确认一次。出现 cdhash 说明签名不稳定，不许发布。
 if [[ "$REQUIREMENT" == *cdhash* ]]; then
-  echo "⚠️  警告：指定要求里是 cdhash，属于 ad-hoc 签名，用户每次更新都会丢失隐私授权。"
+  if [[ "${ALLOW_ADHOC_SIGNING:-0}" == "1" ]]; then
+    echo "⚠️  指定要求是 cdhash（ad-hoc 签名），已按 ALLOW_ADHOC_SIGNING=1 放行。"
+  else
+    echo "❌ 指定要求里是 cdhash，说明签名没有绑定到证书上。"
+    echo "   这种版本会让用户每次更新都重新授权隐私权限，已中止。"
+    exit 1
+  fi
 fi
 
 mkdir -p "$DIST_DIR"
