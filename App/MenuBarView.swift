@@ -201,6 +201,13 @@ private struct SessionCard: View {
 
             if session.state == .running {
                 levelMeters
+                if session.activeLanguages[.me] != nil {
+                    Toggle("静音麦克风（不影响会议软件）", isOn: Binding(
+                        get: { session.isMicrophoneMuted },
+                        set: { session.setMicrophoneMuted($0) }
+                    ))
+                    .help("只让 LingoLens 不再采麦克风这一路，会议上闭麦时用")
+                }
             }
 
             if panel.isVisible {

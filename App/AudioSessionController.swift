@@ -43,6 +43,10 @@ final class AudioSessionController: ObservableObject {
     private var recorders: [AudioChannel: ChannelAudioRecorder] = [:]
     /// Whisper 边车进程，仅在选择 Whisper 引擎时存在。
     private var whisperSessions: [AudioChannel: WhisperTranscriber] = [:]
+    /// 会话进行中临时静音「我」这一路（会议软件里闭麦时用）。
+    @Published private(set) var isMicrophoneMuted = false
+    /// 外放时对方声音会从麦克风串回来，用它与「对方」通道去重。
+    private var echoSuppressor = EchoSuppressor()
 
     /// 缓冲区间累积的峰值，由电平循环按固定帧率取走并平滑衰减。
     private var levelPeak: [AudioChannel: Float] = [:]
@@ -151,6 +155,8 @@ final class AudioSessionController: ObservableObject {
                     guard let self else { continue }
                     let level = AudioBufferTools.level(of: tagged.buffer)
                     self.levelPeak[tagged.channel] = max(self.levelPeak[tagged.channel] ?? 0, level)
+                    // 用户临时静音麦克风：这一路既不录音也不转写。
+                    if tagged.channel == .me, self.isMicrophoneMuted { continue }
                     // 录音与转写各拿一份：录音内部转成 16k 单声道，不阻塞采集。
                     self.recorders[tagged.channel]?.append(tagged.buffer)
                     // 两套引擎只会有一套在跑：Whisper 边车 或 系统识别会话。
@@ -175,6 +181,15 @@ final class AudioSessionController: ObservableObject {
             state = .failed(error.localizedDescription)
             statusText = error.localizedDescription
         }
+    }
+
+    /// 会话进行中临时静音/恢复「我」这一路。
+    func setMicrophoneMuted(_ muted: Bool) {
+        guard isMicrophoneMuted != muted else { return }
+        isMicrophoneMuted = muted
+        levelPeak[.me] = 0
+        levels[.me] = 0
+        AppLog.write("[audio] 麦克风\(muted ? "已静音" : "已恢复")")
     }
 
     /// 结束时返回刚才落盘的会议（没有记录会议时为 nil），供界面给出「会议已保存」回执。
@@ -209,6 +224,8 @@ final class AudioSessionController: ObservableObject {
         }
         currentMeeting = nil
         isRecordingMeeting = false
+        isMicrophoneMuted = false
+        echoSuppressor.reset()
         activeLanguages = [:]
         startedAt = nil
         state = .idle
@@ -352,6 +369,16 @@ final class AudioSessionController: ObservableObject {
     }
 
     private func handle(_ event: TranscriptionEvent) {
+        // 回声去重：外放时同一句话会同时出现在「对方」和「我」两路。
+        if event.isFinal {
+            if event.channel == .other {
+                echoSuppressor.noteOther(event.text, at: event.timestamp)
+            } else if echoSuppressor.isEcho(event.text, at: event.timestamp) {
+                AppLog.write("[audio] 丢弃麦克风回声：\(event.text.prefix(24))")
+                return
+            }
+        }
+
         let lineID = subtitleStore.apply(event)
         guard event.isFinal, let lineID else { return }
 
