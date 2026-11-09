@@ -171,6 +171,23 @@
 - **自动常驻**：`downloadModel` 完成后调用 `applyDefaultResidentModelIfNeeded()`，
   下载结束即设为常驻模型；完成/失败都会弹 toast，因为那时界面往往不在前台。
 
+### 3.9 模型市场（0.2.0）
+
+下载面板从「输入仓库名」改成「搜索 + 列表选择 + 滚动加载」：
+
+- **搜索接口**：魔搭的搜索是 **PUT** `/api/v1/dolphin/models`，请求体
+  `{PageSize, PageNumber, Name, SortBy}`；返回 `Data.Model.Models[]`，
+  其中 `Path` 是命名空间、`Name` 是仓库名，拼起来才是完整 repo id。
+  （GET 形式全部 404，别浪费时间试。）
+- **分页**：每页 10 条，`hasMore` 用**原始返回条数**是否满页判断，
+  不能用过滤后的条数——服务端过滤发生在解析之后。
+- **MLX 过滤**：本应用只能加载 MLX 权重，所以默认只留名字带 mlx 的条目。
+  但直接搜 `whisper` 前 10 条全是非 MLX（openai-mirror、iic、faster-whisper…），
+  过滤后会变成空列表。因此查询词不含 mlx 时自动补一个 ` mlx` 关键词
+  （魔搭按名字做多词匹配），实测 `whisper` → `whisper mlx` 后能正常返回 10 条 MLX 结果。
+- **滚动加载**：LazyVStack 最后一行出现时自动取下一页，另给一个「加载更多」兜底按钮；
+  每次换关键词用 generation 代号丢弃过期响应，避免慢请求覆盖新结果。
+
 ### 3.4 设置
 
 - `~/Library/Application Support/LingoLens/settings.json`，300ms 防抖落盘。
