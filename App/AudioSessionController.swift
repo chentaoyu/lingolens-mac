@@ -160,11 +160,14 @@ final class AudioSessionController: ObservableObject {
 
             // 麦克风模式：off 完全不采；follow 先不采，等别的应用开麦再采；always 直接采。
             wantsMicrophone = config.captureMicrophone && config.microphoneMode != .off
+            // 每次都先刷新一次，避免上一次会话留下的「别人在用」状态污染本次判断。
+            microphoneMonitor.refresh()
             let startMicrophoneImmediately = wantsMicrophone && config.microphoneMode == .always
-            if wantsMicrophone && config.microphoneMode == .follow {
-                microphoneMonitor.refresh()
-            }
-            let shouldStartMic = startMicrophoneImmediately || microphoneMonitor.isOtherAppUsingInput
+            // 只有 follow 档才看「别的应用是否占用」；off 档必须完全不听这个信号。
+            let followWantsMic = wantsMicrophone
+                && config.microphoneMode == .follow
+                && microphoneMonitor.isOtherAppUsingInput
+            let shouldStartMic = startMicrophoneImmediately || followWantsMic
 
             let stream = try capture.start(
                 options: AudioCaptureOptions(
@@ -216,7 +219,7 @@ final class AudioSessionController: ObservableObject {
         microphoneWatchTask?.cancel()
         microphoneWatchTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                guard let self else { return }
+                guard let self, self.state == .running else { return }
                 let shouldCapture = self.microphoneMonitor.isOtherAppUsingInput && !self.isMicrophoneMuted
                 if shouldCapture != self.isMicrophoneCapturing {
                     do {
@@ -227,6 +230,7 @@ final class AudioSessionController: ObservableObject {
                         AppLog.write("[audio] 切换麦克风失败：\(error.localizedDescription)")
                     }
                 }
+                if Task.isCancelled { return }
                 try? await Task.sleep(for: .seconds(1))
             }
         }
@@ -244,6 +248,11 @@ final class AudioSessionController: ObservableObject {
     /// 结束时返回刚才落盘的会议（没有记录会议时为 nil），供界面给出「会议已保存」回执。
     @discardableResult
     func stop() async -> MeetingMeta? {
+        // 先停跟随任务，否则它可能在 capture.stop() 之后又把麦克风打开，导致会话结束还占着设备。
+        microphoneWatchTask?.cancel()
+        microphoneWatchTask = nil
+        microphoneMonitor.stop()
+
         captureTask?.cancel()
         captureTask = nil
         capture.stop()
@@ -275,9 +284,8 @@ final class AudioSessionController: ObservableObject {
         isRecordingMeeting = false
         isMicrophoneMuted = false
         echoSuppressor.reset()
-        microphoneWatchTask?.cancel()
-        microphoneWatchTask = nil
-        microphoneMonitor.stop()
+        // 兜底：确认设备已释放（跟随任务曾在会话中途开过麦克风）。
+        try? capture.setMicrophoneActive(false)
         wantsMicrophone = false
         isMicrophoneCapturing = false
         activeLanguages = [:]
