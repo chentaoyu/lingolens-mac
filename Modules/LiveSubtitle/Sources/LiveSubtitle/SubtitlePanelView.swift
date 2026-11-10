@@ -1,4 +1,5 @@
 import AudioCapture
+import Foundation
 import SwiftUI
 
 public struct SubtitlePanelView: View {
@@ -8,8 +9,16 @@ public struct SubtitlePanelView: View {
     private let onToggleClickThrough: () -> Void
 
     @State private var isHovering = false
-    /// 是否跟随最新一行；用户往上滚动后置 false，避免抢滚动位置。
-    @State private var isPinnedToBottom = true
+    /// 是否跟随最新一行。只有用户主动滚动才会改变它；字幕变高（译文回填、原文折行）不算。
+    @State private var isFollowing = true
+    /// 「回到最新」倒计时剩余秒数；nil 表示没有在倒计时。
+    @State private var autoResumeRemaining: Int?
+    /// 自增表示请求跟随内容滚到底部（内容长高时）。
+    @State private var followRequest = 0
+    /// 自增表示请求带动画地回到底部（点按钮 / 倒计时结束）。
+    @State private var resumeRequest = 0
+    /// 不参与渲染的滚动跟踪状态，避免滚动过程每帧都触发界面刷新。
+    @State private var scrollState = ScrollState()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(
@@ -60,7 +69,8 @@ public struct SubtitlePanelView: View {
         model.pausedLines ?? store.lines
     }
 
-    /// 可滚动的字幕列表：默认跟随最新一行，用户往上翻后就不再抢滚动位置。
+    /// 可滚动的字幕列表：默认跟随最新一行；用户往上翻后暂停跟随，
+    /// 停手若干秒后自动回到最新，也可以点「回到最新」立刻回去。
     private var subtitleScroll: some View {
         ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
@@ -78,55 +88,176 @@ public struct SubtitlePanelView: View {
                     .padding(.vertical, 2)
                 }
                 .scrollIndicators(.automatic)
-                .onScrollGeometryChange(for: Bool.self) { geometry in
-                    let distance = geometry.contentSize.height
-                        - geometry.containerSize.height
-                        - geometry.contentOffset.y
-                    return distance <= 24
-                } action: { _, atBottom in
-                    isPinnedToBottom = atBottom
+                .onScrollGeometryChange(for: ScrollSnapshot.self) { geometry in
+                    ScrollSnapshot(
+                        offsetY: geometry.contentOffset.y,
+                        contentHeight: geometry.contentSize.height,
+                        containerHeight: geometry.containerSize.height
+                    )
+                } action: { _, snapshot in
+                    handleGeometryChange(snapshot)
                 }
-                .onChange(of: lines.last?.id) { _, _ in
-                    guard isPinnedToBottom else { return }
-                    scrollToBottom(proxy, animated: !reduceMotion)
+                // 内容长高（译文回填、原文折行、改字号）后跟着滚到底，
+                // 否则最新一行会停在视野外面。
+                .onChange(of: followRequest) { _, _ in
+                    scrollToBottom(proxy, animated: false, suppressWindow: Self.followScrollWindow)
                 }
-                .onChange(of: lines.count) { _, _ in
-                    guard isPinnedToBottom else { return }
-                    scrollToBottom(proxy, animated: false)
+                // 点了「回到最新」或倒计时结束。
+                .onChange(of: resumeRequest) { _, _ in
+                    scrollToBottom(proxy, animated: !reduceMotion, suppressWindow: Self.resumeScrollWindow)
                 }
 
-                // 往上翻之后给一个回到底部的入口，否则新字幕只能干等。
-                if !isPinnedToBottom {
-                    Button {
-                        isPinnedToBottom = true
-                        scrollToBottom(proxy, animated: !reduceMotion)
-                    } label: {
-                        Label("回到最新", systemImage: "arrow.down.to.line")
-                            .font(.system(size: 10, weight: .medium))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Capsule().fill(Color.white.opacity(0.18)))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.white.opacity(0.9))
-                    .padding(6)
-                    .transition(.opacity)
+                if !isFollowing {
+                    resumeButton
+                        .transition(.opacity)
                 }
             }
             .onAppear {
                 // 打开时直接停在最新一行。
-                isPinnedToBottom = true
-                scrollToBottom(proxy, animated: false)
+                isFollowing = true
+                scrollToBottom(proxy, animated: false, suppressWindow: 0.2)
+            }
+            .onDisappear {
+                scrollState.settleTask?.cancel()
+                stopAutoResume()
             }
         }
     }
 
-    private static let bottomAnchor = "subtitle-bottom-anchor"
+    /// 往上翻之后给一个回到底部的入口，并显示自动回到最新的倒计时。
+    private var resumeButton: some View {
+        Button(action: requestResume) {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.down.to.line")
+                    .font(.system(size: 9, weight: .semibold))
+                Text("回到最新")
+                if let remaining = autoResumeRemaining {
+                    Text("\(remaining)s")
+                        .monospacedDigit()
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+            }
+            .font(.system(size: 10, weight: .medium))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(Color.white.opacity(0.18)))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white.opacity(0.9))
+        .padding(6)
+        .help(autoResumeRemaining.map { "\($0) 秒后自动回到最新，点击立即回到" } ?? "回到最新一行")
+        .accessibilityLabel("回到最新")
+    }
 
-    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
+    // MARK: - 跟随与自动回到底部
+
+    /// 滚动几何变化。
+    ///
+    /// 关键点：内容高度变化（译文回填、原文折行、改字号）和窗口缩放都会改变
+    /// “离底部的距离”，但它们不是用户在滚动，不能据此关闭跟随——旧实现就是
+    /// 在这里被误判，导致用户没操作、自动滚动却停了。
+    private func handleGeometryChange(_ snapshot: ScrollSnapshot) {
+        let contentChanged = snapshot.contentHeight != scrollState.contentHeight
+        let containerChanged = snapshot.containerHeight != scrollState.containerHeight
+        scrollState.contentHeight = snapshot.contentHeight
+        scrollState.containerHeight = snapshot.containerHeight
+
+        if contentChanged || containerChanged {
+            if isFollowing {
+                followRequest &+= 1
+            }
+            return
+        }
+
+        // 程序化滚动的中间帧也会离开底部，别当成用户滚上去了。
+        guard Date() >= scrollState.suppressUntil else { return }
+
+        let distance = snapshot.contentHeight - snapshot.containerHeight - snapshot.offsetY
+        // 内容还装不满一屏时不存在“滚上去看历史”，直接算在底部。
+        let isScrollable = snapshot.contentHeight - snapshot.containerHeight > 1
+        let atBottom = !isScrollable || distance <= Self.bottomTolerance
+
+        scrollState.lastUserScrollAt = Date()
+        if atBottom {
+            stopAutoResume()
+            isFollowing = true
+        } else {
+            // 用户又接着滚了：作废旧倒计时，等这次停手后重新计时。
+            stopAutoResume()
+            isFollowing = false
+            watchScrollEnd()
+        }
+    }
+
+    /// 等用户真正停手（含惯性滚动）后再开始自动回到底部的倒计时。
+    private func watchScrollEnd() {
+        guard scrollState.settleTask == nil else { return }
+        scrollState.settleTask = Task { @MainActor in
+            defer { scrollState.settleTask = nil }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(150))
+                if Task.isCancelled { return }
+                if Date().timeIntervalSince(scrollState.lastUserScrollAt) >= Self.scrollSettleDelay {
+                    break
+                }
+            }
+            guard !Task.isCancelled, !isFollowing else { return }
+            startAutoResume()
+        }
+    }
+
+    private func startAutoResume() {
+        stopAutoResume()
+        let seconds = Self.autoResumeDelay
+        autoResumeRemaining = seconds
+        scrollState.countdownTask = Task { @MainActor in
+            for remaining in stride(from: seconds - 1, through: 0, by: -1) {
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                } catch {
+                    return
+                }
+                autoResumeRemaining = remaining > 0 ? remaining : nil
+            }
+            guard !Task.isCancelled, !isFollowing else { return }
+            requestResume()
+        }
+    }
+
+    private func stopAutoResume() {
+        scrollState.countdownTask?.cancel()
+        scrollState.countdownTask = nil
+        if autoResumeRemaining != nil {
+            autoResumeRemaining = nil
+        }
+    }
+
+    /// 回到最新一行并重新开始跟随。
+    private func requestResume() {
+        scrollState.settleTask?.cancel()
+        scrollState.settleTask = nil
+        stopAutoResume()
+        isFollowing = true
+        resumeRequest &+= 1
+    }
+
+    private static let bottomAnchor = "subtitle-bottom-anchor"
+    /// 离底部这个范围内都算“在底部”。
+    private static let bottomTolerance: CGFloat = 24
+    /// 用户停手多久后算滚动结束。
+    private static let scrollSettleDelay: TimeInterval = 0.5
+    /// 往上翻后多久自动回到最新（秒）。
+    private static let autoResumeDelay = 6
+    /// 跟随内容滚动后忽略自身几何变化的窗口。
+    private static let followScrollWindow: TimeInterval = 0.15
+    /// 动画回到底部后忽略自身几何变化的窗口。
+    private static let resumeScrollWindow: TimeInterval = 0.4
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool, suppressWindow: TimeInterval) {
+        scrollState.suppressUntil = Date().addingTimeInterval(suppressWindow)
         let action = { proxy.scrollTo(Self.bottomAnchor, anchor: .bottom) }
         if animated {
-            withAnimation(.easeOut(duration: 0.2)) { action() }
+            withAnimation(.easeOut(duration: 0.25)) { action() }
         } else {
             action()
         }
@@ -280,4 +411,29 @@ private extension View {
     func iconHitArea() -> some View {
         frame(width: 20, height: 20).contentShape(Rectangle())
     }
+}
+
+/// 滚动几何快照。用来区分“用户滚动”和“内容/窗口尺寸变化”。
+private struct ScrollSnapshot: Equatable {
+    var offsetY: CGFloat
+    var contentHeight: CGFloat
+    var containerHeight: CGFloat
+}
+
+/// 不参与渲染的滚动跟踪状态。
+///
+/// 这些字段每帧都会变，放进 `@State` 会让整个字幕列表反复求值；
+/// 用引用类型收起来，只让真正影响界面的状态（isFollowing / 倒计时）触发刷新。
+@MainActor
+private final class ScrollState {
+    var contentHeight: CGFloat = 0
+    var containerHeight: CGFloat = 0
+    /// 用户最后一次滚动的时间（含程序化滚动被排除后的判定）。
+    var lastUserScrollAt = Date.distantPast
+    /// 在此之前到达的几何变化来自程序化滚动，不算用户滚动。
+    var suppressUntil = Date.distantPast
+    var settleTask: Task<Void, Never>?
+    var countdownTask: Task<Void, Never>?
+
+    nonisolated init() {}
 }
