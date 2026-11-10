@@ -114,7 +114,7 @@ if [[ "${PUBLISH:-}" == "1" ]]; then
   git add site/appcast.xml
   git commit -m "LingoLens macOS - chore(发布): 更新 appcast 至 $VERSION"
   git push
-  echo "✅ 已发布 $TAG，Pages 部署完成后客户端即可检测到更新"
+  echo "✅ 已发布 ${TAG}，Pages 部署完成后客户端即可检测到更新"
 else
   echo "👉 手动发布：gh release create $TAG \"$DMG\"，然后提交推送 site/appcast.xml"
 fi
