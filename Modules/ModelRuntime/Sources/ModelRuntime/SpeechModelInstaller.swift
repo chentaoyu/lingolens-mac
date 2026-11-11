@@ -4,13 +4,14 @@ import Foundation
 public enum SpeechEngine: String, Codable, CaseIterable, Sendable {
     /// 系统自带的 SpeechAnalyzer：零下载、实时草稿，但中英混说时英文缩写容易被音译。
     case apple
-    /// 本地 Whisper（mlx-audio）：中英混说准确得多，需要下载模型，字幕按句出现。
+    /// 本地大模型（mlx-audio，默认 Qwen3-ASR）：中英混说准确得多，需要下载模型，字幕按句出现。
+    /// case 名保留 whisper，兼容已保存的设置。
     case whisper
 
     public var displayName: String {
         switch self {
         case .apple: return "系统语音识别"
-        case .whisper: return "Whisper（本地，更准）"
+        case .whisper: return "本地模型（更准）"
         }
     }
 }
@@ -28,16 +29,93 @@ public struct SpeechModelFile: Sendable, Equatable {
     }
 }
 
-/// 从魔搭（ModelScope）下载 Whisper 模型。
+/// 一个可安装的本地语音模型（权重托管在魔搭）。
+public struct SpeechModel: Sendable, Equatable {
+    public let id: String
+    public let displayName: String
+    public let files: [SpeechModelFile]
+
+    public init(id: String, displayName: String, files: [SpeechModelFile]) {
+        self.id = id
+        self.displayName = displayName
+        self.files = files
+    }
+
+    public var totalBytes: Int64 { files.reduce(0) { $0 + $1.expectedSize } }
+
+    /// 人类可读的体积，设置页展示用。
+    public var sizeText: String {
+        let mb = Double(totalBytes) / 1_000_000
+        if mb >= 1000 { return String(format: "%.1f GB", mb / 1000) }
+        return String(format: "%.0f MB", mb)
+    }
+
+    /// 最大的文件视为权重本体，用于安装完成校验。
+    public var weightFile: SpeechModelFile? { files.max { $0.expectedSize < $1.expectedSize } }
+
+    /// 解析实际要用的模型：显式选择优先（须已安装），否则按目录顺序取第一个已安装的。
+    public static func resolve(preferredID: String?, installedIDs: Set<String>) -> SpeechModel? {
+        if let preferredID,
+           let preferred = all.first(where: { $0.id == preferredID }),
+           installedIDs.contains(preferred.id) {
+            return preferred
+        }
+        return all.first { installedIDs.contains($0.id) }
+    }
+}
+
+extension SpeechModel {
+    /// 默认模型：Qwen3-ASR-0.6B 8bit（约 1 GB）。WenetSpeech 会议测试集 CER 约 6.9%，
+    /// 比 Whisper-large-v3 的 19.1% 好约 3 倍；支持热词与自动语种检测。
+    public static let qwen3ASR = SpeechModel(
+        id: "qwen3-asr-0.6b-8bit",
+        displayName: "Qwen3-ASR 0.6B（8bit）",
+        files: [
+            SpeechModelFile(repository: "mlx-community/Qwen3-ASR-0.6B-8bit", name: "config.json", expectedSize: 7_187),
+            SpeechModelFile(repository: "mlx-community/Qwen3-ASR-0.6B-8bit", name: "configuration.json", expectedSize: 64),
+            SpeechModelFile(repository: "mlx-community/Qwen3-ASR-0.6B-8bit", name: "generation_config.json", expectedSize: 142),
+            SpeechModelFile(repository: "mlx-community/Qwen3-ASR-0.6B-8bit", name: "preprocessor_config.json", expectedSize: 330),
+            SpeechModelFile(repository: "mlx-community/Qwen3-ASR-0.6B-8bit", name: "chat_template.json", expectedSize: 1_161),
+            SpeechModelFile(repository: "mlx-community/Qwen3-ASR-0.6B-8bit", name: "tokenizer_config.json", expectedSize: 12_487),
+            SpeechModelFile(repository: "mlx-community/Qwen3-ASR-0.6B-8bit", name: "vocab.json", expectedSize: 2_776_833),
+            SpeechModelFile(repository: "mlx-community/Qwen3-ASR-0.6B-8bit", name: "merges.txt", expectedSize: 1_671_853),
+            SpeechModelFile(repository: "mlx-community/Qwen3-ASR-0.6B-8bit", name: "model.safetensors.index.json", expectedSize: 71_815),
+            SpeechModelFile(repository: "mlx-community/Qwen3-ASR-0.6B-8bit", name: "model.safetensors", expectedSize: 1_006_229_426)
+        ]
+    )
+
+    /// 旧默认模型（约 464 MB），保留作回退：已下载的用户不用重新下载。
+    /// 官方模型仓库与量化权重仓库分开：魔搭上的 q4 仓库只放了 config 和权重。
+    public static let whisperTurboQ4 = SpeechModel(
+        id: "whisper-large-v3-turbo-q4",
+        displayName: "Whisper large-v3-turbo（4bit）",
+        files: [
+            SpeechModelFile(repository: "mlx-community/whisper-large-v3-turbo-q4", name: "config.json", expectedSize: 341),
+            SpeechModelFile(repository: "mlx-community/whisper-large-v3-turbo-q4", name: "weights.npz", expectedSize: 463_664_664),
+            SpeechModelFile(repository: "AI-ModelScope/whisper-large-v3-turbo", name: "preprocessor_config.json", expectedSize: 340),
+            SpeechModelFile(repository: "AI-ModelScope/whisper-large-v3-turbo", name: "generation_config.json", expectedSize: 3_772),
+            SpeechModelFile(repository: "AI-ModelScope/whisper-large-v3-turbo", name: "tokenizer.json", expectedSize: 2_710_337),
+            SpeechModelFile(repository: "AI-ModelScope/whisper-large-v3-turbo", name: "tokenizer_config.json", expectedSize: 282_843),
+            SpeechModelFile(repository: "AI-ModelScope/whisper-large-v3-turbo", name: "vocab.json", expectedSize: 1_036_558),
+            SpeechModelFile(repository: "AI-ModelScope/whisper-large-v3-turbo", name: "merges.txt", expectedSize: 493_869),
+            SpeechModelFile(repository: "AI-ModelScope/whisper-large-v3-turbo", name: "special_tokens_map.json", expectedSize: 2_186),
+            SpeechModelFile(repository: "AI-ModelScope/whisper-large-v3-turbo", name: "added_tokens.json", expectedSize: 34_648),
+            SpeechModelFile(repository: "AI-ModelScope/whisper-large-v3-turbo", name: "normalizer.json", expectedSize: 52_666)
+        ]
+    )
+
+    /// 安装候选按优先级排列：新模型在前，旧模型兜底。
+    public static let all: [SpeechModel] = [.qwen3ASR, .whisperTurboQ4]
+}
+
+/// 从魔搭（ModelScope）下载语音模型。
 ///
 /// 为什么不用 HuggingFace：实测这台机器直连 huggingface.co 完全超时，
 /// 魔搭同样内容能跑到 2.6 MB/s，而且国内普遍可达。
 public actor SpeechModelInstaller {
-    public static let defaultModelID = "whisper-large-v3-turbo-q4"
+    public static let defaultModelID = SpeechModel.qwen3ASR.id
 
-    /// 官方模型仓库与量化权重仓库分开：魔搭上的 q4 仓库只放了 config 和权重。
-    static let tokenizerRepository = "AI-ModelScope/whisper-large-v3-turbo"
-    static let weightsRepository = "mlx-community/whisper-large-v3-turbo-q4"
+    public nonisolated let model: SpeechModel
 
     public struct Progress: Sendable, Equatable {
         public let completedBytes: Int64
@@ -54,8 +132,9 @@ public actor SpeechModelInstaller {
     private let session: URLSession
     private let baseURL = "https://www.modelscope.cn/models"
 
-    public init(paths: RuntimePaths) {
+    public init(paths: RuntimePaths, model: SpeechModel = .qwen3ASR) {
         self.paths = paths
+        self.model = model
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 60
         configuration.timeoutIntervalForResource = 1800
@@ -65,37 +144,18 @@ public actor SpeechModelInstaller {
     public nonisolated var directory: URL {
         paths.appSupportDirectory
             .appendingPathComponent("models-stt", isDirectory: true)
-            .appendingPathComponent(Self.defaultModelID, isDirectory: true)
+            .appendingPathComponent(model.id, isDirectory: true)
     }
 
     private nonisolated var markerURL: URL {
         directory.appendingPathComponent("installed.json")
     }
 
-    /// 模型文件清单。体积来自魔搭仓库元数据，用于进度和完整性校验。
-    public static let files: [SpeechModelFile] = [
-        SpeechModelFile(repository: weightsRepository, name: "config.json", expectedSize: 341),
-        SpeechModelFile(repository: weightsRepository, name: "weights.npz", expectedSize: 463_664_664),
-        SpeechModelFile(repository: tokenizerRepository, name: "preprocessor_config.json", expectedSize: 340),
-        SpeechModelFile(repository: tokenizerRepository, name: "generation_config.json", expectedSize: 3_772),
-        SpeechModelFile(repository: tokenizerRepository, name: "tokenizer.json", expectedSize: 2_710_337),
-        SpeechModelFile(repository: tokenizerRepository, name: "tokenizer_config.json", expectedSize: 282_843),
-        SpeechModelFile(repository: tokenizerRepository, name: "vocab.json", expectedSize: 1_036_558),
-        SpeechModelFile(repository: tokenizerRepository, name: "merges.txt", expectedSize: 493_869),
-        SpeechModelFile(repository: tokenizerRepository, name: "special_tokens_map.json", expectedSize: 2_186),
-        SpeechModelFile(repository: tokenizerRepository, name: "added_tokens.json", expectedSize: 34_648),
-        SpeechModelFile(repository: tokenizerRepository, name: "normalizer.json", expectedSize: 52_666)
-    ]
-
-    public static var totalBytes: Int64 {
-        files.reduce(0) { $0 + $1.expectedSize }
-    }
-
     /// 是否已经装好：标记文件存在且权重文件大小对得上。
     public nonisolated var isInstalled: Bool {
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: markerURL.path) else { return false }
-        guard let weight = Self.files.first(where: { $0.name == "weights.npz" }) else { return false }
+        guard let weight = model.weightFile else { return false }
         let url = directory.appendingPathComponent(weight.name)
         guard let size = (try? fileManager.attributesOfItem(atPath: url.path)[.size]) as? Int64 else {
             return false
@@ -110,9 +170,9 @@ public actor SpeechModelInstaller {
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
 
         var completed: Int64 = 0
-        let total = Self.totalBytes
+        let total = model.totalBytes
 
-        for file in Self.files {
+        for file in model.files {
             let destination = directory.appendingPathComponent(file.name)
             let existing = (try? fileManager.attributesOfItem(atPath: destination.path)[.size]) as? Int64 ?? 0
             if existing == file.expectedSize {
@@ -136,7 +196,7 @@ public actor SpeechModelInstaller {
         }
 
         let marker: [String: Any] = [
-            "modelID": Self.defaultModelID,
+            "modelID": model.id,
             "installedAt": ISO8601DateFormatter().string(from: Date()),
             "bytes": total
         ]

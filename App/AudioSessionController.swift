@@ -132,11 +132,11 @@ final class AudioSessionController: ObservableObject {
             }
 
             let useWhisper = settingsStore.settings.speech.engine == .whisper
-                && SpeechModelInstaller(paths: paths).isInstalled
+                && Self.installedSpeechInstaller(paths: paths) != nil
             if settingsStore.settings.speech.engine == .whisper, !useWhisper {
-                // 选了 Whisper 但模型还没装：退回系统识别，别让用户没有字幕。
-                statusText = "Whisper 模型未下载，暂用系统识别"
-                AppLog.write("[speech] whisper 模型未安装，回退系统识别")
+                // 选了本地模型但还没装：退回系统识别，别让用户没有字幕。
+                statusText = "本地模型未下载，暂用系统识别"
+                AppLog.write("[speech] 本地语音模型未安装，回退系统识别")
             }
 
             for (channel, identifiers) in languages {
@@ -300,9 +300,11 @@ final class AudioSessionController: ObservableObject {
 
     /// 一路 Whisper 边车。字幕按句出现，因此在音频会话里也按句上报。
     private func startWhisper(channel: AudioChannel, identifiers: [String]) async throws {
-        statusText = "加载 Whisper 模型（\(channel.displayName)）…"
+        statusText = "加载本地语音模型（\(channel.displayName)）…"
         let settings = settingsStore.settings.speech
-        let installer = SpeechModelInstaller(paths: paths)
+        guard let installer = Self.installedSpeechInstaller(paths: paths, preferredID: settings.modelID) else {
+            throw WhisperTranscriberError.launchFailed("本地语音模型未安装")
+        }
         let script = try Self.sttScriptURL()
 
         let transcriber = WhisperTranscriber(
@@ -352,12 +354,23 @@ final class AudioSessionController: ObservableObject {
         throw TranscriptionError.assetInstallationFailed("找不到语音转写脚本 lingolens_stt.py")
     }
 
-    /// Whisper 只接受单种语言代码；设置里的 zh-Hans / en 映射过去。
+    /// 边车只接受单种语言代码；设置里的 zh-Hans / en 映射过去。
+    /// Qwen3-ASR 的语言名映射在边车内部完成。
     private static func whisperLanguage(for identifiers: [String]) -> String {
         for identifier in identifiers where identifier.hasPrefix("zh") {
             return "zh"
         }
         return identifiers.first.map { $0.hasPrefix("en") ? "en" : $0 } ?? "zh"
+    }
+
+    /// 解析要用的本地模型：设置里显式选择的优先，否则按目录顺序回退
+    /// （Qwen3-ASR → Whisper），老用户已下载的旧模型不用重新下载。
+    private static func installedSpeechInstaller(paths: RuntimePaths, preferredID: String? = nil) -> SpeechModelInstaller? {
+        let installedIDs = Set(SpeechModel.all.filter { model in
+            SpeechModelInstaller(paths: paths, model: model).isInstalled
+        }.map(\.id))
+        guard let model = SpeechModel.resolve(preferredID: preferredID, installedIDs: installedIDs) else { return nil }
+        return SpeechModelInstaller(paths: paths, model: model)
     }
 
     // MARK: - 录音落盘

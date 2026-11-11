@@ -211,17 +211,21 @@ public struct RuntimeInstallSettings: Codable, Sendable, Equatable {
 /// 语音识别引擎与领域词表。
 public struct SpeechSettings: Codable, Sendable, Equatable {
     public var engine: SpeechEngine
-    /// 英文缩写与专有名词，逗号分隔。Whisper 的 hotwords 会显著提高这类词的命中率。
+    /// 指定使用的本地模型 ID；nil 表示自动（优先新模型，未装则回退旧模型）。
+    public var modelID: String?
+    /// 英文缩写与专有名词，逗号分隔。热词会显著提高这类词的命中率。
     public var hotwords: String
 
-    public init(engine: SpeechEngine = .apple, hotwords: String = "") {
+    public init(engine: SpeechEngine = .apple, modelID: String? = nil, hotwords: String = "") {
         self.engine = engine
+        self.modelID = modelID
         self.hotwords = hotwords
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         engine = (try? container.decodeIfPresent(SpeechEngine.self, forKey: .engine)) ?? .apple
+        modelID = try? container.decodeIfPresent(String.self, forKey: .modelID)
         hotwords = (try? container.decodeIfPresent(String.self, forKey: .hotwords)) ?? ""
     }
 

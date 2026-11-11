@@ -124,8 +124,8 @@ App 为菜单栏常驻应用（`LSUIElement`），启动后不显示 Dock 图标
 系统语音识别（SpeechAnalyzer）是「一句话一种语言」，中英混说时英文缩写常被按读音写成
 汉字——实测 ES 会变成「淹死」，API latency 会变成 ATI LantonC。
 
-在「设置 → 音频与字幕」里把识别引擎切到 **Whisper（本地，更准）**，首次需要下载约 464 MB
-模型（从魔搭，实测 2.6 MB/s）。同一段音频的对照：
+在「设置 → 音频与字幕」里把识别引擎切到 **本地模型（更准）**，首次需要下载约 1 GB
+模型（默认 Qwen3-ASR 0.6B 8bit，从魔搭下载）。同一段音频的对照：
 
 | 词 | 系统识别 | Whisper |
 |---|---|---|
@@ -135,7 +135,12 @@ App 为菜单栏常驻应用（`LSUIElement`），启动后不显示 Dock 图标
 | release | realase | release |
 | beta | fito | beta |
 
-代价：Whisper 按句出字幕，没有实时草稿；常驻内存约 0.73 GB。
+默认引擎已从 Whisper 升级为 Qwen3-ASR：WenetSpeech 会议测试集字错率约 6.9%
+（Whisper-large-v3 为 19.1%）；真实录音对比中「生成式」「栩栩如生」「ChatGPT」等
+词都更准，解码速度快约 3 倍。已下载旧 Whisper 模型（约 464 MB）的用户会继续
+用它作回退，无需重新下载。「设置 → 音频与字幕」和菜单栏面板里可以查看每个
+模型的大小与安装状态，并在「自动 / Qwen3-ASR / Whisper」之间切换。
+代价：本地模型按句出字幕，没有实时草稿。
 「领域词表」里填 ES, API, PRD, deadline 这类缩写还能进一步提高命中率。
 
 ### 更新下载失败怎么办
@@ -236,6 +241,7 @@ LINGOLENS_SPEECH_TEST_FILE=/tmp/zh.aiff LINGOLENS_SPEECH_LOCALE=zh-Hans \
 | [uv](https://github.com/astral-sh/uv)（内置 Python 包管理器） | Apache-2.0 / MIT |
 | [mlx-vlm](https://github.com/Blaizzy/mlx-vlm)、mlx-audio（运行时安装） | MIT |
 | Whisper 模型权重（用户自行下载） | MIT（OpenAI） |
+| Qwen3-ASR 语音模型权重（用户自行下载） | Apache-2.0 |
 | Qwen 模型权重（用户自行下载） | 见模型仓库自带许可 |
 
 模型权重不随本仓库分发，由用户按各自许可自行下载。

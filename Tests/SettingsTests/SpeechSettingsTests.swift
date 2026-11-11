@@ -35,5 +35,20 @@ struct SpeechSettingsTests {
     func decodesLegacy() throws {
         let settings = try JSONDecoder().decode(SpeechSettings.self, from: Data("{}".utf8))
         #expect(settings.engine == .apple)
+        #expect(settings.modelID == nil)
+    }
+
+    @Test("模型选择默认为自动")
+    func modelDefaultsToAuto() {
+        #expect(SpeechSettings().modelID == nil)
+    }
+
+    @Test("模型选择编解码往返")
+    func modelIDCodable() throws {
+        let settings = SpeechSettings(engine: .whisper, modelID: "qwen3-asr-0.6b-8bit")
+        let data = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(SpeechSettings.self, from: data)
+        #expect(decoded.modelID == "qwen3-asr-0.6b-8bit")
+        #expect(decoded == settings)
     }
 }

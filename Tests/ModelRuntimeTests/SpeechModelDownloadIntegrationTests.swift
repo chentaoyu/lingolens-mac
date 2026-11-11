@@ -18,7 +18,7 @@ final class ProgressPrinter: @unchecked Sendable {
     }
 }
 
-/// 真实从魔搭下载 Whisper 模型（约 464 MB），默认跳过。
+/// 真实从魔搭下载默认语音模型（约 1 GB），默认跳过。
 /// LINGOLENS_SPEECH_DOWNLOAD_TEST=1 swift test --filter SpeechModelDownloadIntegrationTests
 @Suite("模型下载集成")
 struct SpeechModelDownloadIntegrationTests {
@@ -48,7 +48,7 @@ struct SpeechModelDownloadIntegrationTests {
         print("[download] 用时 \(Int(Date().timeIntervalSince(started)))s")
 
         #expect(installer.isInstalled)
-        for file in SpeechModelInstaller.files {
+        for file in installer.model.files {
             let url = installer.directory.appendingPathComponent(file.name)
             let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? Int64 ?? 0
             #expect(abs(size - file.expectedSize) <= max(file.expectedSize / 100, 1024),

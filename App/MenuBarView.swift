@@ -231,6 +231,12 @@ private struct SessionCard: View {
                     label("识别引擎")
                     enginePicker
                 }
+                if environment.settings.speech.engine == .whisper {
+                    GridRow {
+                        label("模型")
+                        speechModelPicker
+                    }
+                }
                 GridRow {
                     label("对方语言")
                     languagePicker(\.otherLanguage)
@@ -299,9 +305,9 @@ private struct SessionCard: View {
             .pickerStyle(.menu)
             .labelsHidden()
 
-            // 选了 Whisper 但模型没下好时给一句提示，否则用户不知道会退回系统识别。
+            // 选了本地模型但没下好时给一句提示，否则用户不知道会退回系统识别。
             if environment.settings.speech.engine == .whisper, !environment.speechModelInstalled {
-                Text("Whisper 模型未下载，会话会退回系统识别")
+                Text("本地模型未下载，会话会退回系统识别")
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -313,6 +319,38 @@ private struct SessionCard: View {
         Binding(
             get: { environment.settings.speech.engine },
             set: { value in environment.updateSpeech { $0.engine = value } }
+        )
+    }
+
+    /// 本地模型选择：与设置页一致，会话开始后不可改。
+    private var speechModelPicker: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Picker("", selection: speechModelBinding) {
+                Text("自动").tag(String?.none)
+                ForEach(SpeechModel.all, id: \.id) { model in
+                    Text(model.displayName + (environment.installedSpeechModelIDs.contains(model.id) ? "" : "（未下载）"))
+                        .tag(String?.some(model.id))
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+
+            // 选的模型没下载时说明实际在用哪个，避免用户以为切换没生效。
+            if let active = environment.activeSpeechModel,
+               let preferredID = environment.settings.speech.modelID,
+               preferredID != active.id {
+                Text("所选模型未下载，暂用 \(active.displayName)")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var speechModelBinding: Binding<String?> {
+        Binding(
+            get: { environment.settings.speech.modelID },
+            set: { value in environment.updateSpeech { $0.modelID = value } }
         )
     }
 

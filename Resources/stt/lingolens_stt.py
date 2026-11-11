@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""LingoLens 本地语音转写边车（Whisper / mlx-audio）。
+"""LingoLens 本地语音转写边车（Whisper / Qwen3-ASR，mlx-audio）。
 
 协议
 ----
@@ -20,7 +20,9 @@
 """
 import argparse
 import json
+import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -64,6 +66,70 @@ HALLUCINATION_MARKERS = (
 )
 # 句首回补，避免吞掉第一个字的起音。
 PREROLL_FRAMES = SAMPLE_RATE * 25 // 100
+
+# Qwen3-ASR 的语言参数用语言名（Chinese/English），不认 zh/en 代码；
+# 传 None 时模型自动检测语种，中英混说更稳。
+QWEN3_LANGUAGES = {
+    "zh": "Chinese",
+    "zh-hans": "Chinese",
+    "zh-cn": "Chinese",
+    "zh-hant": "Chinese",
+    "yue": "Cantonese",
+    "en": "English",
+    "ja": "Japanese",
+    "ko": "Korean",
+}
+
+
+def detect_model_type(model_dir):
+    """读 config.json 区分模型类型；读不到就按 Whisper 处理（兼容旧模型目录）。"""
+    try:
+        with open(os.path.join(model_dir, "config.json"), encoding="utf-8") as fh:
+            return json.load(fh).get("model_type", "whisper")
+    except (OSError, ValueError):
+        return "whisper"
+
+
+def is_hotword_recitation(text, hotwords):
+    """Qwen3-ASR 这类上下文偏置模型在噪声/音乐段上会把热词表原样背出来。
+    去掉全部热词与标点后什么都不剩，就判定为背诵，整段丢弃。"""
+    if not hotwords:
+        return False
+    remaining = text.lower()
+    for word in sorted(hotwords, key=len, reverse=True):
+        remaining = remaining.replace(word.lower(), "")
+    remaining = re.sub(r"[\s,，.。、:：;；!！?？\-—]+", "", remaining)
+    return not remaining
+
+
+def is_prompt_echo(text, prompt):
+    """噪声段上模型可能把提示词本身当成转写结果吐出来（Whisper 的
+    initial_prompt、Qwen3-ASR 的 system_prompt 都有这毛病）。
+    输出与提示高度重合就整段丢弃。"""
+    if not prompt:
+        return False
+    strip = r"[\s,，.。、:：;；!！?？\-—]+"
+    t = re.sub(strip, "", text).lower()
+    p = re.sub(strip, "", prompt).lower()
+    if not t or not p:
+        return False
+    # 整段提示被原样吐出（可能夹几个语气词）。
+    if p in t:
+        return True
+    # 输出是提示的片段：至少 5 个字才算，避免误伤「普通话」这类正常短词。
+    if len(t) >= 5 and t in p:
+        return True
+    # 输出 80% 以上的字符按顺序来自提示，视为回声（容忍少量改写）。
+    if len(t) >= 8:
+        prev = [0] * (len(p) + 1)
+        for ca in t:
+            cur = [0]
+            for j, cb in enumerate(p, 1):
+                cur.append(prev[j - 1] + 1 if ca == cb else max(prev[j], cur[j - 1]))
+            prev = cur
+        if prev[-1] / len(t) >= 0.8:
+            return True
+    return False
 
 
 def emit(payload):
@@ -170,16 +236,24 @@ def main():
     args = parser.parse_args()
 
     hotwords = [word.strip() for word in args.hotwords.split(",") if word.strip()]
-    # 中文场景默认给一句简体提示：Whisper 偶尔会输出繁体，prompt 能明显压住。
+    model_type = detect_model_type(args.model)
+    # 默认简体提示只给 Whisper：它偶尔输出繁体，需要 prompt 压住。
+    # Qwen3-ASR 默认就输出简体，系统提示反而容易在噪声段被原样吐出来。
     prompt = args.prompt
-    if not prompt and args.language in ("zh", "zh-Hans", "zh-CN"):
+    if not prompt and model_type != "qwen3_asr" and args.language in ("zh", "zh-Hans", "zh-CN"):
         prompt = "以下是普通话会议记录，请用简体中文转写。"
+
+    language = args.language
+    if model_type == "qwen3_asr":
+        language = QWEN3_LANGUAGES.get(args.language.lower())
+        if args.language.lower() in ("auto", ""):
+            language = None
 
     from mlx_audio.stt import load
 
     started = time.time()
     model = load(args.model)
-    log("model loaded in %.2fs hotwords=%d" % (time.time() - started, len(hotwords)))
+    log("model loaded in %.2fs type=%s hotwords=%d" % (time.time() - started, model_type, len(hotwords)))
     emit({"type": "ready"})
 
     segments = queue.Queue()
@@ -200,18 +274,34 @@ def main():
                 continue
             began = time.time()
             try:
-                result = model.generate(
-                    audio,
-                    language=args.language,
-                    hotwords=hotwords or None,
-                    initial_prompt=prompt or None,
-                )
+                if model_type == "qwen3_asr":
+                    # Qwen3-ASR 没有 initial_prompt：提示走 system_prompt，
+                    # 热词由 mlx-audio 内部并入系统提示。
+                    result = model.generate(
+                        audio,
+                        language=language,
+                        hotwords=hotwords or None,
+                        system_prompt=prompt or None,
+                    )
+                else:
+                    result = model.generate(
+                        audio,
+                        language=args.language,
+                        hotwords=hotwords or None,
+                        initial_prompt=prompt or None,
+                    )
                 text = (result.text or "").strip()
             except Exception as exc:  # 单句失败不应终止整个会话
                 emit({"type": "error", "message": "%s: %s" % (type(exc).__name__, exc)})
                 continue
             if text and any(marker in text for marker in HALLUCINATION_MARKERS):
                 log("丢弃幻觉片段: %s" % text[:30])
+                continue
+            if text and is_hotword_recitation(text, hotwords):
+                log("丢弃热词背诵片段: %s" % text[:40])
+                continue
+            if text and is_prompt_echo(text, prompt):
+                log("丢弃提示回声片段: %s" % text[:40])
                 continue
             if text:
                 emit({

@@ -160,7 +160,7 @@ struct AppSettingsView: View {
                     }
                 }
                 if environment.settings.speech.engine == .whisper {
-                    whisperStatusRow
+                    speechModelList
                     TextField(
                         "领域词表",
                         text: speechBinding(\.hotwords),
@@ -174,7 +174,7 @@ struct AppSettingsView: View {
                     .foregroundStyle(.secondary)
                 Text("「同时保存音频」会把两路声音各存成 16 kHz 单声道 m4a（约 16 MB/小时），放在会议目录里，可用于事后复盘与重新转写。")
                     .foregroundStyle(.secondary)
-                Text("中英混说时系统识别会把英文缩写按读音写成汉字（例如 ES → 淹死）。Whisper 是本地模型，这类词准得多，但字幕按句出现、不显示实时草稿；领域词表可进一步提高缩写命中率。")
+                Text("中英混说时系统识别会把英文缩写按读音写成汉字（例如 ES → 淹死）。本地模型（默认 Qwen3-ASR）这类词准得多，但字幕按句出现、不显示实时草稿；领域词表可进一步提高缩写命中率。")
                     .foregroundStyle(.secondary)
             }
 
@@ -402,27 +402,63 @@ struct AppSettingsView: View {
         .formStyle(.grouped)
     }
 
-    /// Whisper 模型状态 + 下载入口。
+    /// 本地模型列表：单选切换 + 体积/安装状态 + 下载入口。
     @ViewBuilder
-    private var whisperStatusRow: some View {
-        if let progress = environment.speechModelProgress {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("下载 \(progress.currentFile) · \(Int(progress.fraction * 100))%")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                ProgressView(value: progress.fraction)
+    private var speechModelList: some View {
+        let preferredID = environment.settings.speech.modelID
+        VStack(alignment: .leading, spacing: 8) {
+            Text("本地模型").font(.caption).foregroundStyle(.secondary)
+            modelRow(
+                id: nil,
+                name: "自动",
+                detail: "优先 Qwen3-ASR，未安装时回退 Whisper",
+                installed: true,
+                selected: preferredID == nil
+            )
+            ForEach(SpeechModel.all, id: \.id) { model in
+                modelRow(
+                    id: model.id,
+                    name: model.displayName,
+                    detail: model.sizeText,
+                    installed: environment.installedSpeechModelIDs.contains(model.id),
+                    selected: preferredID == model.id
+                )
             }
-        } else if environment.speechModelInstalled {
-            LabeledContent("Whisper 模型") {
-                Label("已就绪", systemImage: "checkmark.seal.fill")
-                    .foregroundStyle(Color.success)
-            }
-        } else {
-            LabeledContent("Whisper 模型") {
-                Button("下载（约 464 MB）") {
-                    Task { await environment.downloadSpeechModel() }
+            if let progress = environment.speechModelProgress {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("下载 \(progress.currentFile) · \(Int(progress.fraction * 100))%")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ProgressView(value: progress.fraction)
                 }
+            }
+        }
+    }
+
+    private func modelRow(id: String?, name: String, detail: String, installed: Bool, selected: Bool) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                environment.updateSpeech { $0.modelID = id }
+            } label: {
+                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                    .foregroundStyle(selected ? Color.accentColor : .secondary)
+            }
+            .buttonStyle(.plain)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(name).font(.system(size: 12))
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if let id, !installed {
+                Button("下载") {
+                    Task { await environment.downloadSpeechModel(modelID: id) }
+                }
+                .controlSize(.small)
                 .disabled(environment.isDownloadingSpeechModel)
+            } else if id != nil {
+                Label("已就绪", systemImage: "checkmark.seal.fill")
+                    .font(.caption)
+                    .foregroundStyle(Color.success)
             }
         }
     }
