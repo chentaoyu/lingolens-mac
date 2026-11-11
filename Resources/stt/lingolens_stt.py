@@ -132,6 +132,27 @@ def is_prompt_echo(text, prompt):
     return False
 
 
+def trim_repetition(text):
+    """LLM 解码器在噪声段上会陷入重复循环（如「那卡就，」重复几百遍，
+    一直生成到 token 上限）。发现连续重复的短语就截断到第一次出现处，
+    保留之前的有效内容。正常语句里的少量重复（「二十三楼，二十三楼」）不受影响。"""
+    n = len(text)
+    if n < 24:
+        return text
+    for plen in range(1, 9):
+        need = 6 if plen == 1 else 4
+        i = 0
+        while i + plen * need <= n:
+            phrase = text[i:i + plen]
+            count = 1
+            while text[i + count * plen:i + (count + 1) * plen] == phrase:
+                count += 1
+            if count >= need:
+                return text[:i + plen].rstrip("，。、！？,.!? ")
+            i += 1
+    return text
+
+
 def emit(payload):
     sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
     sys.stdout.flush()
@@ -282,6 +303,9 @@ def main():
                         language=language,
                         hotwords=hotwords or None,
                         system_prompt=prompt or None,
+                        # 25 秒的段正常不超过 300 token；封顶 512，
+                        # 避免噪声段陷入重复循环后一路生成到 8192（数十秒）。
+                        max_tokens=512,
                     )
                 else:
                     result = model.generate(
@@ -294,6 +318,10 @@ def main():
             except Exception as exc:  # 单句失败不应终止整个会话
                 emit({"type": "error", "message": "%s: %s" % (type(exc).__name__, exc)})
                 continue
+            trimmed = trim_repetition(text)
+            if len(trimmed) < len(text):
+                log("截断重复循环: %d -> %d 字" % (len(text), len(trimmed)))
+            text = trimmed
             if text and any(marker in text for marker in HALLUCINATION_MARKERS):
                 log("丢弃幻觉片段: %s" % text[:30])
                 continue
@@ -337,7 +365,7 @@ def main():
     for segment in segmenter.flush():
         segments.put(segment)
     segments.put(None)
-    thread.join(timeout=180)
+    thread.join(timeout=30)
     log("done")
     return 0
 

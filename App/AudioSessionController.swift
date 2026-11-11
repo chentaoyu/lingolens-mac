@@ -21,6 +21,8 @@ final class AudioSessionController: ObservableObject {
     @Published private(set) var state: State = .idle
     @Published private(set) var statusText = "未开始"
     @Published private(set) var isRecordingMeeting = false
+    /// 停止流程进行中（等边车转完最后一段）；按钮据此禁用并显示「收尾中」。
+    @Published private(set) var isStopping = false
     @Published private(set) var activeLanguages: [AudioChannel: String] = [:]
     @Published private(set) var startedAt: Date?
     /// 两路音频的当前电平（0…1），菜单栏用来显示「有没有采到声音」。
@@ -248,6 +250,11 @@ final class AudioSessionController: ObservableObject {
     /// 结束时返回刚才落盘的会议（没有记录会议时为 nil），供界面给出「会议已保存」回执。
     @discardableResult
     func stop() async -> MeetingMeta? {
+        // 收尾可能要等边车转完最后一段；期间禁止重复触发，界面显示「收尾中」。
+        guard !isStopping else { return nil }
+        isStopping = true
+        statusText = "正在收尾…"
+        defer { isStopping = false }
         // 先停跟随任务，否则它可能在 capture.stop() 之后又把麦克风打开，导致会话结束还占着设备。
         microphoneWatchTask?.cancel()
         microphoneWatchTask = nil
@@ -264,11 +271,14 @@ final class AudioSessionController: ObservableObject {
         }
         sessions.removeAll()
 
-        // 边车要等最后一段转写完，放在取消事件消费者之前。
-        for transcriber in whisperSessions.values {
-            await transcriber.finish()
-        }
+        // 边车要等最后一段转写完，放在取消事件消费者之前；两路并行收尾。
+        let transcribers = Array(whisperSessions.values)
         whisperSessions.removeAll()
+        await withTaskGroup(of: Void.self) { group in
+            for transcriber in transcribers {
+                group.addTask { await transcriber.finish() }
+            }
+        }
 
         for task in eventTasks.values {
             task.cancel()

@@ -225,8 +225,11 @@ public actor WhisperTranscriber {
         if let process, process.isRunning {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 process.terminationHandler = { _ in continuation.resume() }
-                DispatchQueue.global().asyncAfter(deadline: .now() + 120) {
-                    if process.isRunning { process.terminate() }
+                DispatchQueue.global().asyncAfter(deadline: .now() + 15) {
+                    if process.isRunning {
+                        TranscriptionLog.write("[whisper] 收尾超时，强制结束边车进程")
+                        process.terminate()
+                    }
                 }
             }
         }

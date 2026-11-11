@@ -296,6 +296,7 @@ struct SessionButton: View {
         let session = environment.audioSession
         Button {
             Task {
+                if session.isStopping { return }
                 if session.state == .running || session.state == .starting {
                     await environment.stopAudioSession()
                 } else {
@@ -305,10 +306,14 @@ struct SessionButton: View {
         } label: {
             switch session.state {
             case .running:
-                Label {
-                    SessionTimer(startedAt: session.startedAt)
-                } icon: {
-                    Image(systemName: "stop.fill")
+                if session.isStopping {
+                    Label("收尾中…", systemImage: "hourglass")
+                } else {
+                    Label {
+                        SessionTimer(startedAt: session.startedAt)
+                    } icon: {
+                        Image(systemName: "stop.fill")
+                    }
                 }
             case .starting:
                 Label("启动中…", systemImage: "hourglass")
@@ -317,6 +322,7 @@ struct SessionButton: View {
             }
         }
         .buttonStyle(.borderedProminent)
+        .disabled(session.isStopping)
         .tint(session.state == .running ? Color.danger : .accentColor)
         .accessibilityLabel(session.state == .running || session.state == .starting ? "停止音频会话" : "开始音频会话")
     }
