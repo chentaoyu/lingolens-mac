@@ -3,12 +3,12 @@
     <channel>
         <title>LingoLens</title>
         <item>
-            <title>0.3.0</title>
-            <pubDate>Wed, 11 Nov 2026 15:19:36 +0800</pubDate>
-            <sparkle:version>16</sparkle:version>
-            <sparkle:shortVersionString>0.3.0</sparkle:shortVersionString>
+            <title>0.3.1</title>
+            <pubDate>Thu, 12 Nov 2026 10:39:40 +0800</pubDate>
+            <sparkle:version>17</sparkle:version>
+            <sparkle:shortVersionString>0.3.1</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/chentaoyu/lingolens-mac/releases/download/v0.3.0/LingoLens-0.3.0.dmg" length="24714954" type="application/octet-stream" sparkle:edSignature="meONK7uH+vuRwf6sYP/B5glggQAE4Ccu/8jbxTTqCAZc9yzJ+HpCL6+U61k4ugyVp5VeOXoGqGsSW0P8OuN5Cw=="/>
+            <enclosure url="https://github.com/chentaoyu/lingolens-mac/releases/download/v0.3.1/LingoLens-0.3.1.dmg" length="24726402" type="application/octet-stream" sparkle:edSignature="9Y39Kerr4xLQgZRz/IOz30FToq4ERTgTr7ywtw7ZzbX6S82RiioWRYRD7JtKViXqbcpwM35DOoq4BZLh1ruUBg=="/>
         </item>
     </channel>
 </rss>
